@@ -1,0 +1,167 @@
+/* STYLE_DARK.QSS
+    A dark theme for the task manager.
+*/
+
+QWidget {
+    background-color: #2B2B2B;
+    color: white;
+    font-size: 10pt;
+}
+QTabWidget::pane {
+    border-top: 2px solid #3A3A3A;
+}
+QTabBar::tab {
+    background: #4A4D50;
+    color: white;
+    padding: 10px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    min-width: 100px; /* Give tabs some width */
+}
+QTabBar::tab:selected {
+    background: #2B2B2B;
+    border: 2px solid #3A3A3A;
+    border-bottom: none; 
+}
+QPushButton {
+    background-color: #1F6AA5; /* Blue */
+    color: white;
+    padding: 8px;
+    border-radius: 4px;
+    border: none;
+    min-height: 20px; /* Ensure buttons have height */
+}
+QPushButton:hover {
+    background-color: #3B8ED0;
+}
+QPushButton:pressed {
+    background-color: #1A5A90;
+}
+QPushButton:disabled {
+    background-color: #4A4D50;
+    color: #888;
+}
+QLineEdit, QComboBox, QPlainTextEdit, QTimeEdit, QTextEdit {
+    background-color: #343638;
+    border: 1px solid #4A4D50;
+    padding: 5px;
+    border-radius: 4px;
+    min-height: 20px; /* Ensure inputs have height */
+}
+QComboBox::drop-down { border: none; }
+QComboBox::down-arrow { image: none; } /* Basic styling, no custom arrow */
+QScrollArea {
+    border: none;
+}
+QScrollBar:vertical {
+     background: #2B2B2B;
+     width: 15px;
+     margin: 0px 0px 0px 0px;
+     border-radius: 4px;
+ }
+ QScrollBar::handle:vertical {
+     background: #4A4D50;
+     min-height: 20px;
+     border-radius: 4px;
+ }
+ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+     height: 0px; /* Hide arrows */
+ }
+ QScrollBar:horizontal {
+     background: #2B2B2B;
+     height: 15px;
+     margin: 0px 0px 0px 0px;
+     border-radius: 4px;
+ }
+ QScrollBar::handle:horizontal {
+     background: #4A4D50;
+     min-width: 20px;
+     border-radius: 4px;
+ }
+ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+     width: 0px;
+ }
+QCalendarWidget QWidget#qt_calendar_navigationbar { 
+    background-color: #343638; 
+}
+QCalendarWidget QToolButton { 
+    color: white; 
+    background-color: #4A4D50; 
+    border: none; 
+    padding: 5px;
+    margin: 2px;
+    border-radius: 3px;
+}
+QCalendarWidget QToolButton:hover { background-color: #5A5D60; }
+QCalendarWidget QMenu { background-color: #343638; color: white; }
+QCalendarWidget QSpinBox { background-color: #4A4D50; color: white; border: none; padding: 3px;}
+QCalendarWidget QWidget#qt_calendar_calendarview { 
+    background-color: #2B2B2B; /* Match main background */
+    alternate-background-color: #343638; /* Slightly lighter for grid */
+}
+QCalendarWidget QAbstractItemView:enabled { /* Day numbers */
+    color: white; 
+    selection-background-color: #1F6AA5; /* Selection color */
+    selection-color: white; /* Selected text color */
+}
+QCalendarWidget QAbstractItemView:disabled { color: #777777; } /* Other month days */
+QTextBrowser { /* Styling for notes preview */
+    background-color: #343638;
+    border: 1px solid #4A4D50;
+    padding: 5px;
+    border-radius: 4px;
+}
+QGroupBox {
+    border: 1px solid #4A4D50;
+    border-radius: 4px;
+    margin-top: 10px; 
+    font-weight: bold;
+    background-color: #343638; /* Match inner widgets */
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 0px;
+    left: 0px;
+    color: transparent; /* Hide default title */
+}
+QToolBar {
+    background-color: #343638;
+    border: none;
+    padding: 3px;
+}
+QToolBar QToolButton {
+     background-color: #4A4D50;
+     border-radius: 4px;
+     padding: 4px;
+}
+QToolBar QToolButton:hover {
+     background-color: #5A5D60;
+}
+QToolBar QToolButton:checked {
+     background-color: #1F6AA5; /* Blue when active */
+}
+
+/* --- THEME-AWARE WIDGETS --- */
+
+/* Specific to TaskWidget (Dark) */
+#taskFrame {
+    border-radius: 4px;
+    background-color: #343638; /* Default */
+}
+#taskFrame[priority="High"] {
+    background-color: #4E3434; /* Dark Red */
+}
+#taskFrame[priority="Medium"] {
+    background-color: #4D462E; /* Dark Yellow */
+}
+#taskFrame[priority="Low"] {
+    background-color: #334633; /* Dark Green */
+}
+
+/* Specific to TodayTaskWidget (Dark) */
+#todayTaskFrame {
+    border-radius: 4px;
+    background-color: #343638; /* Dark background */
+    padding: 2px;
+}

@@ -1,0 +1,173 @@
+/* STYLE_LIGHT.QSS
+    A light theme for the task manager.
+*/
+
+QWidget {
+    background-color: #FFFFFF;
+    color: black;
+    font-size: 10pt;
+}
+QTabWidget::pane {
+    border-top: 2px solid #DDDDDD;
+}
+QTabBar::tab {
+    background: #F0F0F0;
+    color: black;
+    padding: 10px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    min-width: 100px;
+}
+QTabBar::tab:selected {
+    background: #FFFFFF;
+    border: 2px solid #DDDDDD;
+    border-bottom: 2px solid #FFFFFF; /* Hide bottom border */
+}
+QPushButton {
+    background-color: #0078D7; /* Standard Blue */
+    color: white;
+    padding: 8px;
+    border-radius: 4px;
+    border: none;
+    min-height: 20px;
+}
+QPushButton:hover {
+    background-color: #106EBC;
+}
+QPushButton:pressed {
+    background-color: #005A9E;
+}
+QPushButton:disabled {
+    background-color: #DCDCDC;
+    color: #888888;
+}
+QLineEdit, QComboBox, QPlainTextEdit, QTimeEdit, QTextEdit {
+    background-color: #FFFFFF;
+    border: 1px solid #CCCCCC;
+    padding: 5px;
+    border-radius: 4px;
+    min-height: 20px;
+    color: black;
+}
+QComboBox::drop-down { border: none; }
+QComboBox::down-arrow { image: none; }
+QScrollArea {
+    border: none;
+}
+QScrollBar:vertical {
+     background: #F0F0F0;
+     width: 15px;
+     margin: 0px 0px 0px 0px;
+     border-radius: 4px;
+ }
+ QScrollBar::handle:vertical {
+     background: #C0C0C0; /* Silver */
+     min-height: 20px;
+     border-radius: 4px;
+ }
+ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+     height: 0px;
+ }
+ QScrollBar:horizontal {
+     background: #F0F0F0;
+     height: 15px;
+     margin: 0px 0px 0px 0px;
+     border-radius: 4px;
+ }
+ QScrollBar::handle:horizontal {
+     background: #C0C0C0;
+     min-width: 20px;
+     border-radius: 4px;
+ }
+ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+     width: 0px;
+ }
+QCalendarWidget QWidget#qt_calendar_navigationbar { 
+    background-color: #F0F0F0; 
+}
+QCalendarWidget QToolButton { 
+    color: black; 
+    background-color: #E0E0E0; 
+    border: none; 
+    padding: 5px;
+    margin: 2px;
+    border-radius: 3px;
+}
+QCalendarWidget QToolButton:hover { background-color: #D0D0D0; }
+QCalendarWidget QMenu { background-color: #FFFFFF; color: black; }
+QCalendarWidget QSpinBox { background-color: #E0E0E0; color: black; border: none; padding: 3px;}
+QCalendarWidget QWidget#qt_calendar_calendarview { 
+    background-color: #FFFFFF;
+    alternate-background-color: #F7F7F7;
+}
+QCalendarWidget QAbstractItemView:enabled {
+    color: black; 
+    selection-background-color: #0078D7;
+    selection-color: white;
+}
+QCalendarWidget QAbstractItemView:disabled { color: #AAAAAA; }
+QTextBrowser {
+    background-color: #F8F8F8;
+    border: 1px solid #DDDDDD;
+    padding: 5px;
+    border-radius: 4px;
+    color: black;
+}
+QGroupBox {
+    border: 1px solid #DDDDDD;
+    border-radius: 4px;
+    margin-top: 10px; 
+    font-weight: bold;
+    background-color: #F8F8F8;
+    color: black;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 0px;
+    left: 0px;
+    color: transparent;
+}
+QToolBar {
+    background-color: #F0F0F0;
+    border: none;
+    padding: 3px;
+}
+QToolBar QToolButton {
+     background-color: #E0E0E0;
+     border-radius: 4px;
+     padding: 4px;
+     color: black;
+}
+QToolBar QToolButton:hover {
+     background-color: #D0D0D0;
+}
+QToolBar QToolButton:checked {
+     background-color: #0078D7;
+     color: white;
+}
+
+/* --- THEME-AWARE WIDGETS --- */
+
+/* Specific to TaskWidget (Light) */
+#taskFrame {
+    border-radius: 4px;
+    background-color: #F8F8F8; /* Default */
+    border: 1px solid #E0E0E0;
+}
+#taskFrame[priority="High"] {
+    background-color: #FDECEA; /* Light Red */
+}
+#taskFrame[priority="Medium"] {
+    background-color: #FFF9C4; /* Light Yellow */
+}
+#taskFrame[priority="Low"] {
+    background-color: #E8F5E9; /* Light Green */
+}
+
+/* Specific to TodayTaskWidget (Light) */
+#todayTaskFrame {
+    border-radius: 4px;
+    background-color: #FFFFFF; /* White background */
+    padding: 2px;
+}
