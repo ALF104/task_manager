@@ -4,7 +4,8 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QScrollArea, QFrame, QMessageBox, QDialog,
-    QCalendarWidget, QDialogButtonBox
+    QCalendarWidget, QDialogButtonBox,
+    QTreeWidget, QTreeWidgetItem  # <-- NEW IMPORTS
 )
 from PySide6.QtCore import (
     Signal, Qt, QDate
@@ -12,7 +13,8 @@ from PySide6.QtCore import (
 
 # --- Import from our new structure ---
 from app.core.database import (
-    get_tasks, add_task, update_task_status, delete_task, get_all_tasks
+    get_tasks, add_task, update_task_status, delete_task, get_all_tasks,
+    get_sub_tasks, get_pending_subtask_count  # <-- NEW IMPORTS
 )
 from app.widgets.task_widgets import TaskWidget
 from app.widgets.dialogs_task import TaskDetailsDialog
@@ -87,15 +89,10 @@ class TaskManagerTab(QWidget):
         filter_layout.addWidget(self.toggle_view_button)
         layout.addLayout(filter_layout)
         
-        # --- Task List Scroll Area ---
-        self.task_scroll_area = QScrollArea()
-        self.task_scroll_area.setWidgetResizable(True)
-        self.task_list_widget = QWidget()
-        self.task_list_layout = QVBoxLayout(self.task_list_widget)
-        self.task_list_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self.task_list_layout.setSpacing(2)
-        self.task_scroll_area.setWidget(self.task_list_widget)
-        layout.addWidget(self.task_scroll_area, 1) # Give scroll area max space
+        # --- Task List Tree Widget (REPLACED) ---
+        self.task_tree_widget = QTreeWidget()
+        self.task_tree_widget.setHeaderHidden(True) # No header
+        layout.addWidget(self.task_tree_widget, 1) # Give tree max space
 
     def _add_task(self):
         description = self.task_entry.text().strip()
@@ -121,7 +118,8 @@ class TaskManagerTab(QWidget):
             "priority": priority,
             "category": category,
             "notes": "",
-            "show_mode": "auto"
+            "show_mode": "auto",
+            "parent_task_id": None # <-- Explicitly set as a top-level task
         }
 
         try:
@@ -148,14 +146,14 @@ class TaskManagerTab(QWidget):
 
     def _display_tasks(self):
         # Clear existing task widgets
-        while self.task_list_layout.count():
-            item = self.task_list_layout.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater() 
+        self.task_tree_widget.clear()
+        
+        main_window = self.window() # Get main window to connect info button
 
         if self.view_mode == "pending":
+            # get_tasks() now only returns top-level tasks
             tasks_to_show = get_tasks('pending')
+            
             # Sort by priority, then by deadline (tasks without deadline last)
             priority_map = {"High": 0, "Medium": 1, "Low": 2}
             tasks_to_show.sort(key=lambda t: (
@@ -174,19 +172,41 @@ class TaskManagerTab(QWidget):
             if selected_category != "All Categories":
                 tasks_to_show = [t for t in tasks_to_show if t.get('category') == selected_category]
 
-            # Create and add TaskWidget for each task
+            # --- Create and add TaskWidget for each task ---
             for task in tasks_to_show:
                 task_widget = TaskWidget(task)
                 task_widget.status_changed.connect(self._handle_task_status_change)
                 task_widget.delete_requested.connect(self._handle_task_delete)
                 
-                # ***IMPORTANT***: The 'Info' button is handled by the main window
-                # We find the top-level window (MainWindow) and connect to its slot
-                main_window = self.window()
                 if hasattr(main_window, '_open_task_details_dialog'):
                     task_widget.info_requested.connect(main_window._open_task_details_dialog)
                 
-                self.task_list_layout.addWidget(task_widget)
+                # Create a top-level tree item
+                parent_tree_item = QTreeWidgetItem(self.task_tree_widget)
+                self.task_tree_widget.setItemWidget(parent_tree_item, 0, task_widget)
+                
+                # --- NEW: Check for and add sub-tasks ---
+                # We get all sub-tasks so we can see completed ones
+                sub_tasks = get_sub_tasks(task['id'], status="all")
+                
+                if sub_tasks:
+                    # Sort sub-tasks as well
+                    sub_tasks.sort(key=lambda t: (
+                         t.get('status') == 'completed', # Show pending first
+                         priority_map.get(t.get('priority', 'Medium'), 1)
+                    ))
+                
+                    for sub_task in sub_tasks:
+                        sub_task_widget = TaskWidget(sub_task)
+                        sub_task_widget.status_changed.connect(self._handle_task_status_change)
+                        sub_task_widget.delete_requested.connect(self._handle_task_delete)
+                        
+                        if hasattr(main_window, '_open_task_details_dialog'):
+                            sub_task_widget.info_requested.connect(main_window._open_task_details_dialog)
+                            
+                        # Create a child tree item
+                        child_tree_item = QTreeWidgetItem(parent_tree_item)
+                        self.task_tree_widget.setItemWidget(child_tree_item, 0, sub_task_widget)
 
         elif self.view_mode == "completed":
             completed_tasks = get_tasks('completed')
@@ -196,7 +216,10 @@ class TaskManagerTab(QWidget):
                  label_text = f"[{task.get('category', 'G')[:1]}] {task.get('description','')} (Completed: {task.get('date_completed', 'NA')})"
                  completed_label = QLabel(label_text)
                  completed_label.setStyleSheet("color: gray; padding: 5px; background-color: #343638; border-radius: 4px;") 
-                 self.task_list_layout.addWidget(completed_label)
+                 
+                 # Add as a top-level item in the tree
+                 item = QTreeWidgetItem(self.task_tree_widget)
+                 self.task_tree_widget.setItemWidget(item, 0, completed_label)
 
     def _load_categories(self):
         current_selection = self.category_filter_combo.currentText()
@@ -236,17 +259,32 @@ class TaskManagerTab(QWidget):
         self._display_tasks() # Refresh the list
 
     def _handle_task_status_change(self, task_id, is_checked):
+        
+        # --- NEW LOGIC: Check for pending sub-tasks ---
+        if is_checked:
+            try:
+                pending_count = get_pending_subtask_count(task_id)
+                if pending_count > 0:
+                    QMessageBox.warning(self, "Task Not Empty",
+                                        f"You cannot complete this task.\nIt still has {pending_count} pending sub-task(s).")
+                    # Refresh the whole tree. This is the simplest way
+                    # to reset the checkbox to its original state.
+                    self._display_tasks()
+                    return # Stop processing
+            except Exception as e:
+                QMessageBox.critical(self, "Database Error", f"Could not check for sub-tasks: {e}")
+                return
+        # --- END OF NEW LOGIC ---
+
         new_status = 'completed' if is_checked else 'pending'
         date_completed = datetime.now().strftime("%Y-%m-%d") if is_checked else None
+        
         try:
             update_task_status(task_id, new_status, date_completed)
             
-            # Find and remove the widget from the layout
-            for i in range(self.task_list_layout.count()):
-                widget = self.task_list_layout.itemAt(i).widget()
-                if isinstance(widget, TaskWidget) and widget.task_id == task_id:
-                    widget.deleteLater()
-                    break 
+            # Instead of complex logic to find/remove the item,
+            # just refresh the entire display. It's cleaner.
+            self._display_tasks()
             
             # Emit signal that data has changed
             self.task_list_updated.emit()
@@ -256,29 +294,22 @@ class TaskManagerTab(QWidget):
             self._display_tasks() # Full refresh on error
 
     def _handle_task_delete(self, task_id):
-        widget_to_delete = None
-        description = 'this task'
-        # Find the widget to get its description for the confirmation
-        for i in range(self.task_list_layout.count()):
-            widget = self.task_list_layout.itemAt(i).widget()
-            if isinstance(widget, TaskWidget) and widget.task_id == task_id:
-                 widget_to_delete = widget
-                 description = widget.task_data.get('description', 'this task')
-                 break
+        # We don't need to find the widget anymore, as we'll refresh the list.
+        # But we can still get the description for the dialog if we want.
+        # For simplicity, we'll use a generic message.
+        # (We could also query the DB for the task description first)
         
-        if not widget_to_delete:
-             print(f"Error: Could not find widget for task ID {task_id} to delete.")
-             return 
-
         reply = QMessageBox.question(self, 'Confirm Delete',
-                                       f"Are you sure you want to delete '{description}'?",
+                                       f"Are you sure you want to delete this task?\n(This will also delete all its sub-tasks)",
                                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                        QMessageBox.StandardButton.No)
 
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                delete_task(task_id)
-                widget_to_delete.deleteLater() 
+                delete_task(task_id) # This will cascade-delete sub-tasks
+                
+                # Refresh the entire display
+                self._display_tasks() 
                 
                 # Emit signal that data has changed
                 self.task_list_updated.emit()
