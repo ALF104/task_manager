@@ -30,14 +30,19 @@ def create_tables():
     conn = connect_db()
     cursor = conn.cursor()
     
-    # --- Tasks Table ---
+    # --- Enable Foreign Key support ---
+    cursor.execute("PRAGMA foreign_keys = ON;")
+    
+    # --- Tasks Table (MODIFIED) ---
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY, description TEXT NOT NULL, status TEXT NOT NULL,
         date_added TEXT NOT NULL, deadline TEXT, priority TEXT, category TEXT,
         notes TEXT, date_completed TEXT, schedule_event_id TEXT,
         created_by_automation_id TEXT,
-        show_mode TEXT DEFAULT 'auto' NOT NULL  /* 'auto' or 'always_pending' */
+        show_mode TEXT DEFAULT 'auto' NOT NULL,  /* 'auto' or 'always_pending' */
+        parent_task_id TEXT, /* <-- NEW COLUMN FOR SUB-TASKS */
+        FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE
     )""")
     # --- Daily Notes Table ---
     cursor.execute("""
@@ -128,25 +133,27 @@ def create_tables():
 
 # ========== Task Functions ==========
 def add_task(task_data):
-    """ Adds a new task, returns the new task's ID. """
+    """ Adds a new task, returns the new task's ID. (MODIFIED) """
     conn = connect_db()
     cursor = conn.cursor()
     cursor.execute("""
-    INSERT INTO tasks (id, description, status, date_added, deadline, priority, category, notes, created_by_automation_id, show_mode) 
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tasks (id, description, status, date_added, deadline, priority, category, notes, created_by_automation_id, show_mode, parent_task_id) 
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
                    (task_data['id'], task_data['description'], 'pending', task_data['date_added'], 
                     task_data['deadline'], task_data['priority'], task_data['category'], 
                     task_data['notes'], task_data.get('created_by_automation_id'),
-                    task_data.get('show_mode', 'auto')))
+                    task_data.get('show_mode', 'auto'), task_data.get('parent_task_id'))) # <-- ADDED
     conn.commit()
     conn.close()
     return task_data['id'] 
 
 def get_tasks(status="pending"):
+    """ Gets all TOP-LEVEL pending tasks. (MODIFIED) """
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE status = ? ORDER BY date_added", (status,))
+    # This now *only* gets parent tasks (or standalone tasks)
+    cursor.execute("SELECT * FROM tasks WHERE status = ? AND parent_task_id IS NULL ORDER BY date_added", (status,))
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
@@ -159,7 +166,55 @@ def get_all_tasks():
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
+
+# --- NEW FUNCTION for sub-tasks ---
+def get_sub_tasks(parent_task_id, status="all"):
+    """ Gets all sub-tasks for a given parent task_id. """
+    conn = connect_db()
+    cursor = conn.cursor()
     
+    query = "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY date_added"
+    params = [parent_task_id]
+    
+    if status != "all":
+        query = "SELECT * FROM tasks WHERE parent_task_id = ? AND status = ? ORDER BY date_added"
+        params.append(status)
+        
+    cursor.execute(query, tuple(params))
+    tasks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tasks
+
+# --- NEW FUNCTION for sub-tasks ---
+def get_pending_subtask_count(task_id):
+    """ Returns the number of pending sub-tasks for a given task. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM tasks WHERE parent_task_id = ? AND status = 'pending'", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+    
+# --- NEW FUNCTION for Today Dashboard fix ---
+def get_task_by_id(task_id):
+    """ Gets a single task by its ID. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+# --- NEW FUNCTION for Schedule Dialog fix ---
+def get_all_pending_tasks():
+    """ Gets all pending tasks, including parents and sub-tasks. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks WHERE status = 'pending' ORDER BY date_added",)
+    tasks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tasks
+
 def get_task_by_automation_id(automation_id):
     """ Finds the first task that was created by a specific automation rule. """
     conn = connect_db()
@@ -210,6 +265,7 @@ def update_task_details(task_id, description, priority, category, deadline, note
 
 def delete_task(task_id):
     conn = connect_db()
+    conn.execute("PRAGMA foreign_keys = ON;") # Ensure cascade delete is on
     cursor = conn.cursor()
     cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     conn.commit()
@@ -429,6 +485,7 @@ def update_schedule_event(event_id, event_data):
 def delete_schedule_event(event_id):
     """Deletes an event and unlinks associated tasks within a single transaction."""
     conn = connect_db()
+    conn.execute("PRAGMA foreign_keys = ON;") # Ensure cascade delete is on
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
