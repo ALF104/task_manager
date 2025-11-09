@@ -165,9 +165,20 @@ QToolBar QToolButton:checked {
     background-color: #E8F5E9; /* Light Green */
 }
 
-/* Specific to TodayTaskWidget (Light) */
+/* Specific to TodayTaskWidget (Light) - MODIFIED */
 #todayTaskFrame {
     border-radius: 4px;
     background-color: #FFFFFF; /* White background */
     padding: 2px;
 }
+/* --- NEW STYLES --- */
+#todayTaskFrame[priority="High"] {
+    background-color: #FDECEA; /* Light Red */
+}
+#todayTaskFrame[priority="Medium"] {
+    background-color: #FFF9C4; /* Light Yellow */
+}
+#todayTaskFrame[priority="Low"] {
+    background-color: #E8F5E9; /* Light Green */
+}
+/* --- END NEW STYLES --- */
