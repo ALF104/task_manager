@@ -65,7 +65,7 @@ class TaskWidget(QFrame):
     def _emit_info_request(self):
         self.info_requested.emit(self.task_data)
 
-# --- Task Widget for Today Dashboard ---
+# --- Task Widget for Today Dashboard (MODIFIED) ---
 class TodayTaskWidget(QFrame):
     """
     Custom widget for the 'Today' dashboard list.
@@ -73,7 +73,7 @@ class TodayTaskWidget(QFrame):
     """
     completion_changed = Signal(str, str, bool)
 
-    def __init__(self, task_data, is_complete_today):
+    def __init__(self, task_data, is_complete_today, display_description=None):
         super().__init__()
         self.task_data = task_data
         self.task_id = task_data['id']
@@ -83,18 +83,27 @@ class TodayTaskWidget(QFrame):
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(5, 5, 5, 5)
 
-        self.checkbox = QCheckBox(task_data.get('description', 'No Description'))
+        # --- MODIFIED: Use separate CheckBox and RichText Label ---
+        if display_description is None:
+            display_description = task_data.get('description', 'No Description')
+            
+        self.checkbox = QCheckBox() # No text
         self.checkbox.setChecked(is_complete_today)
         self.checkbox.stateChanged.connect(self._emit_completion_change)
-        self.layout.addWidget(self.checkbox, 1)
+        
+        self.description_label = QLabel(display_description)
+        self.description_label.setTextFormat(Qt.TextFormat.RichText) # <-- Render HTML
+        self.description_label.setWordWrap(True)
+        
+        self.layout.addWidget(self.checkbox) # Add checkbox (no stretch)
+        self.layout.addWidget(self.description_label, 1) # Add label (with stretch)
+        # --- END MODIFIED ---
 
+        # --- MODIFIED: Use QSS property for highlighting ---
         priority = task_data.get('priority', 'Medium')
-        priority_label = QLabel(priority)
-
-        # This styling is fine, as it's specific to the logic of this widget
-        colors = {"High": "#E57373", "Medium": "#FFF176", "Low": "#81C784"}
-        priority_label.setStyleSheet(f"color: {colors.get(priority, 'gray')}; font-weight: bold;")
-        self.layout.addWidget(priority_label)
+        self.setProperty("priority", priority)
+        # --- END MODIFIED (Priority label is removed) ---
+        
 
     def _emit_completion_change(self, state):
         self.completion_changed.emit(self.task_id, self.today_str, state == Qt.CheckState.Checked.value)
