@@ -16,7 +16,8 @@ from app.core.database import (
     is_task_logged_complete, get_show_dates_for_task, log_task_completion,
     remove_task_completion_log, get_all_tasks, update_task_status,
     get_schedule_events_for_date, get_calendar_events_for_date,
-    get_daily_note, save_daily_note
+    get_daily_note, save_daily_note,
+    get_task_by_id
 )
 from app.widgets.task_widgets import TodayTaskWidget
 
@@ -154,7 +155,7 @@ class TodayDashboardTab(QWidget):
                 if widget:
                     widget.deleteLater()
                     
-        # --- Populate Today's Tasks ---
+        # --- Populate Today's Tasks (MODIFIED) ---
         try:
             tasks_deadline = get_tasks_by_deadline(date_str)
             tasks_show_date = get_tasks_by_show_date(date_str)
@@ -174,6 +175,26 @@ class TodayDashboardTab(QWidget):
 
             for task in sorted_tasks:
                 task_id = task['id']
+                
+                # --- NEW LOGIC for Sub-task Descriptions ---
+                task_description = task.get('description', 'No Description')
+                parent_id = task.get('parent_task_id')
+                display_description = task_description # Default
+                
+                if parent_id:
+                    try:
+                        # Fetch the parent task to get its name
+                        parent_task = get_task_by_id(parent_id) 
+                        if parent_task:
+                            # --- THIS IS THE FIX ---
+                            # Format as HTML for the new QLabel
+                            parent_name = parent_task.get('description', 'Parent')
+                            display_description = f"<b>{parent_name}:</b> {task_description}"
+                            # --- END OF FIX ---
+                    except Exception as e:
+                        print(f"Error fetching parent task for display: {e}")
+                # --- END NEW LOGIC ---
+                
                 is_complete_today = is_task_logged_complete(task_id, date_str)
                 
                 is_one_off_complete = (task.get('status') == 'completed' and 
@@ -188,7 +209,8 @@ class TodayDashboardTab(QWidget):
                 if is_complete_today and (get_show_dates_for_task(task_id) or task.get('created_by_automation_id')):
                      continue
 
-                task_widget = TodayTaskWidget(task, is_complete_today)
+                # Pass the new formatted description to the widget
+                task_widget = TodayTaskWidget(task, is_complete_today, display_description)
                 task_widget.completion_changed.connect(self._handle_today_task_completion)
                 self.today_task_list_layout.addWidget(task_widget)
 
