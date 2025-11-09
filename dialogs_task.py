@@ -23,7 +23,8 @@ from PySide6.QtCore import (
 # --- Import from our new structure ---
 from app.core.database import (
     add_task, update_task_details, connect_db, add_task_show_date,
-    get_show_dates_for_task, remove_task_show_date
+    get_show_dates_for_task, remove_task_show_date,
+    get_sub_tasks, delete_task  # <-- NEW IMPORTS FOR SUB-TASKS
 )
 
 
@@ -91,6 +92,33 @@ class TaskDetailsDialog(QDialog):
         show_on_layout.addWidget(self.manage_show_dates_button)
 
         self.layout.addWidget(show_on_group)
+        
+        # --- NEW SUB-TASK SECTION ---
+        # Only show the sub-task section if we are editing an *existing* task
+        if not self.is_new_task and self.task_id:
+            sub_task_group = QGroupBox("Sub-tasks")
+            sub_task_layout = QVBoxLayout(sub_task_group)
+            
+            self.sub_task_list_widget = QListWidget()
+            sub_task_layout.addWidget(self.sub_task_list_widget)
+            
+            sub_task_button_layout = QHBoxLayout()
+            add_sub_task_btn = QPushButton("Add Sub-task")
+            add_sub_task_btn.clicked.connect(self._add_sub_task)
+            edit_sub_task_btn = QPushButton("Edit Sub-task")
+            edit_sub_task_btn.clicked.connect(self._edit_sub_task)
+            delete_sub_task_btn = QPushButton("Delete Sub-task")
+            delete_sub_task_btn.clicked.connect(self._delete_sub_task)
+            
+            sub_task_button_layout.addWidget(add_sub_task_btn)
+            sub_task_button_layout.addWidget(edit_sub_task_btn)
+            sub_task_button_layout.addWidget(delete_sub_task_btn)
+            sub_task_layout.addLayout(sub_task_button_layout)
+            
+            self.layout.addWidget(sub_task_group)
+            
+            self._load_sub_tasks() # Load existing sub-tasks
+        # --- END OF NEW SUB-TASK SECTION ---
 
         self.notes_editor = QPlainTextEdit(self.task_data.get('notes', ''))
         self.notes_editor.setPlaceholderText("Enter notes for this task...")
@@ -137,7 +165,8 @@ class TaskDetailsDialog(QDialog):
                     'priority': self.priority_combo.currentText(),
                     'category': self.category_entry.text().strip() or "General",
                     'notes': self.notes_editor.toPlainText(),
-                    'show_mode': show_mode
+                    'show_mode': show_mode,
+                    'parent_task_id': None # Explicitly set new tasks as top-level
                 }
                 new_task_id = add_task(new_task_data)
 
@@ -174,6 +203,100 @@ class TaskDetailsDialog(QDialog):
             dialog = ManageShowDatesDialog(task_id=self.task_id, initial_dates_set=None, parent=self)
             dialog.exec()
             self.task_saved.emit()
+
+    # --- NEW METHODS FOR SUB-TASKS ---
+
+    def _load_sub_tasks(self):
+        """ Clears and re-loads the sub-task list widget. """
+        if not hasattr(self, 'sub_task_list_widget'):
+            return # Should not happen, but a good safeguard
+            
+        self.sub_task_list_widget.clear()
+        try:
+            sub_tasks = get_sub_tasks(self.task_id, status="all")
+            if not sub_tasks:
+                item = QListWidgetItem("No sub-tasks created.")
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setForeground(QColor("gray"))
+                self.sub_task_list_widget.addItem(item)
+                return
+
+            for sub_task in sub_tasks:
+                status_icon = "✓" if sub_task['status'] == 'completed' else "☐"
+                item_text = f"{status_icon} {sub_task['description']}"
+                item = QListWidgetItem(item_text)
+                # Store the *entire* sub-task dictionary in the item
+                item.setData(Qt.ItemDataRole.UserRole, sub_task)
+                self.sub_task_list_widget.addItem(item)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Database Error", f"Failed to load sub-tasks: {e}")
+
+    def _add_sub_task(self):
+        """ Adds a new sub-task to the current task. """
+        desc, ok = QInputDialog.getText(self, "Add Sub-task", "Enter new sub-task description:")
+        if ok and desc:
+            try:
+                # Create a new sub-task, inheriting parent's category
+                new_sub_task_data = {
+                    'id': str(uuid.uuid4()),
+                    'description': desc,
+                    'status': 'pending',
+                    'date_added': datetime.now().strftime("%Y-%m-%d"),
+                    'deadline': None, # Sub-tasks start with no deadline
+                    'priority': 'Medium', # Default priority
+                    'category': self.task_data.get('category', 'General'), # Inherit category
+                    'notes': "",
+                    'show_mode': 'auto',
+                    'parent_task_id': self.task_id # <-- THIS IS THE LINK
+                }
+                add_task(new_sub_task_data)
+                self._load_sub_tasks() # Refresh the list
+                self.task_saved.emit() # Tell the main tab to refresh
+            except Exception as e:
+                 QMessageBox.critical(self, "Database Error", f"Failed to add sub-task: {e}")
+
+    def _edit_sub_task(self):
+        """ Opens the TaskDetailsDialog for the selected sub-task. """
+        current_item = self.sub_task_list_widget.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            QMessageBox.warning(self, "Edit Error", "Please select a sub-task to edit.")
+            return
+            
+        sub_task_data = current_item.data(Qt.ItemDataRole.UserRole)
+        
+        # We can re-use the *same* TaskDetailsDialog class to edit the sub-task
+        dialog = TaskDetailsDialog(sub_task_data, self, is_new_task=False)
+        # When the sub-task dialog saves, we want to:
+        # 1. Refresh *this* dialog's sub-task list
+        dialog.task_saved.connect(self._load_sub_tasks)
+        # 2. Tell the *main window* that data has changed
+        dialog.task_saved.connect(self.task_saved)
+        dialog.exec()
+
+    def _delete_sub_task(self):
+        """ Deletes the selected sub-task. """
+        current_item = self.sub_task_list_widget.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            QMessageBox.warning(self, "Delete Error", "Please select a sub-task to delete.")
+            return
+
+        sub_task_data = current_item.data(Qt.ItemDataRole.UserRole)
+        sub_task_id = sub_task_data['id']
+        sub_task_desc = sub_task_data['description']
+        
+        reply = QMessageBox.question(self, 'Confirm Delete',
+                                   f"Are you sure you want to delete sub-task:\n'{sub_task_desc}'?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                delete_task(sub_task_id) # This will cascade if needed
+                self._load_sub_tasks() # Refresh the list
+                self.task_saved.emit() # Tell the main tab to refresh
+            except Exception as e:
+                QMessageBox.critical(self, "Database Error", f"Failed to delete sub-task: {e}")
 
 
 # --- Manage Show Dates Dialog ---
