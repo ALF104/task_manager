@@ -262,6 +262,15 @@ class CalendarDateDialog(QDialog):
             
             try:
                 add_calendar_event(event_data)
+                
+                # --- START OF ADDED CODE (BUGFIX) ---
+                # Get the main window and run the automation check for the new event
+                # We use self.parent().window() in case self.parent() is the main window
+                main_window = self.parent().window() # <<< THIS IS THE FIX
+                if hasattr(main_window, 'run_automations_for_event'):
+                    main_window.run_automations_for_event(event_data['title'], event_data['date'])
+                # --- END OF ADDED CODE (BUGFIX) ---
+                
                 self._load_events()
                 self.events_changed.emit() # Tell parent to refresh
                     
