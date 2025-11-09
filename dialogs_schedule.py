@@ -22,7 +22,8 @@ from app.core.database import (
     get_tasks_for_event, get_tasks, update_schedule_event, add_schedule_event, 
     link_task_to_event, unlink_task_from_event, delete_schedule_event, 
     get_calendar_events_for_date, add_calendar_event, 
-    update_calendar_event, delete_calendar_event
+    update_calendar_event, delete_calendar_event,
+    get_all_pending_tasks # <-- NEW IMPORT
 )
 
 # --- Schedule Event Dialog ---
@@ -113,7 +114,11 @@ class ScheduleEventDialog(QDialog):
              if widget: widget.deleteLater()
         self.linked_task_vars.clear()
 
-        all_pending_tasks = get_tasks('pending')
+        # --- MODIFIED ---
+        # Use get_all_pending_tasks() to get both parents and sub-tasks
+        all_pending_tasks = get_all_pending_tasks()
+        # --- END MODIFIED ---
+        
         # Get the ID *before* the loop. It will be None if this is a new event.
         current_event_id = self.event_data['id'] if self.event_data else None
         tasks_found = False
