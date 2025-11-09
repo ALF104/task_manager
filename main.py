@@ -368,8 +368,77 @@ class MainWindow(QMainWindow):
         styled_html = f"<style>{style}</style><body>{html_content}</body>"
         text_browser_widget.setHtml(styled_html)
         
-    # --- Automation Logic (FIXED FOR ISSUE #4) ---
-    
+    # --- NEW METHOD: Reusable automation runner (added for bugfix) ---
+    def run_automations_for_event(self, event_title, event_date_str):
+        """
+        Checks a specific event title and date against all automation rules
+        and runs any matching actions.
+        Returns True if actions were run, False otherwise.
+        """
+        if not event_title:
+            return False
+            
+        print(f"[Automation] Checking event '{event_title}' for date {event_date_str}...")
+        actions_run = False
+        try:
+            all_rules = get_automations()
+            if not all_rules:
+                return False # No rules to run
+
+            rules_map = {rule['trigger_title'].lower(): rule for rule in all_rules}
+            event_title_lower = event_title.lower()
+
+            if event_title_lower in rules_map:
+                rule = rules_map[event_title_lower]
+                automation_id = rule['id']
+                print(f"[Automation] MATCH FOUND: Rule '{rule['rule_name']}'")
+
+                actions = get_actions_for_automation(automation_id)
+                if not actions:
+                    print(f"[Automation] Rule found, but it has no actions.")
+                    return False
+
+                created_task_ids = []
+                created_event_ids = []
+
+                # Run task actions
+                task_actions = [a for a in actions if a['action_type'] == 'ensure_task_link']
+                for action in task_actions:
+                    task_id = self._execute_automation_action(action, event_date_str, automation_id)
+                    if task_id:
+                        created_task_ids.append(task_id)
+                        actions_run = True
+
+                # Run schedule actions
+                schedule_actions = [a for a in actions if a['action_type'] == 'create_schedule_block']
+                for action in schedule_actions:
+                    event_id = self._execute_automation_action(action, event_date_str, automation_id)
+                    if event_id:
+                        created_event_ids.append(event_id)
+                        actions_run = True
+
+                # Link tasks to events
+                if created_task_ids and created_event_ids:
+                    print(f"[Automation] Linking {len(created_task_ids)} task(s) to {len(created_event_ids)} event(s).")
+                    for task_id in created_task_ids:
+                        for event_id in created_event_ids:
+                            try:
+                                link_task_to_event(task_id, event_id)
+                                print(f"[Automation]   > Linked task {task_id} to event {event_id}")
+                            except Exception as e:
+                                print(f"[Automation]   > FAILED to link task {task_id} to event {event_id}: {e}")
+
+                if actions_run:
+                    print(f"[Automation] Actions completed for '{event_title}'. Refreshing UI.")
+                    # Trigger a refresh of all tabs that need it
+                    self._on_task_data_changed() 
+
+        except Exception as e:
+            QMessageBox.critical(self, "Automation Error", f"Error during on-demand automation: {e}")
+            
+        return actions_run
+
+    # --- REPLACED METHOD: Now uses the new reusable runner (changed for bugfix) ---
     def _run_startup_automations(self):
         """ Checks today's events and runs any matching automations. """
         today_str = datetime.now().strftime("%Y-%m-%d")
@@ -379,7 +448,7 @@ class MainWindow(QMainWindow):
             print(f"[Automation] Automations already run for {today_str}. Skipping.")
             return
             
-        print(f"[Automation] Running automations for {today_str}...")
+        print(f"[Automation] Running startup automations for {today_str}...")
         
         try:
             events_today = get_calendar_events_for_date(today_str)
@@ -388,93 +457,28 @@ class MainWindow(QMainWindow):
                 set_app_state('last_automation_run_date', today_str)
                 return
 
-            all_rules = get_automations()
-            if not all_rules:
-                print("[Automation] No automation rules defined.")
-                set_app_state('last_automation_run_date', today_str)
-                return
-                
-            rules_map = {rule['trigger_title'].lower(): rule for rule in all_rules}
-            print(f"[Automation] Found {len(rules_map)} rule(s). Checking against {len(events_today)} event(s)...")
+            print(f"[Automation] Checking {len(events_today)} event(s) for today...")
+            
             actions_run = False
-
             for event in events_today:
-                event_title_lower = event.get('title', '').lower()
-                print(f"[Automation] Checking event: '{event_title_lower}'")
-                
-                if self._execute_automation_for_event_title(event_title_lower, rules_map, date_override=today_str):
+                # Use our new reusable function
+                if self.run_automations_for_event(event.get('title', ''), today_str):
                     actions_run = True
                         
             set_app_state('last_automation_run_date', today_str)
-            print("[Automation] Automation run complete.")
+            print("[Automation] Startup automation run complete.")
             
             if actions_run:
-                print("[Automation] Actions were run, triggering full UI refresh.")
-                self._on_task_data_changed() # General refresh
+                # We still need to refresh if startup actions ran
+                self._on_task_data_changed() 
 
         except Exception as e:
             QMessageBox.critical(self, "Automation Error", f"Error during startup automations: {e}")
             
-    def _execute_automation_for_event_title(self, event_title_lower, rules_map, date_override):
-        """ 
-        Checks a single event title against automation rules and executes actions.
-        Returns True if an action was run, False otherwise.
-        
-        *** FIX for Issue #4 ***: 
-        -   Improved logic to link *multiple* tasks to *multiple* schedule blocks.
-        -   Added extensive logging.
-        """
-        if not event_title_lower:
-            return False
-            
-        date_str = date_override
-        actions_run = False
-        
-        if event_title_lower in rules_map:
-            rule = rules_map[event_title_lower]
-            automation_id = rule['id']
-            print(f"[Automation] MATCH FOUND: Rule '{rule['rule_name']}' for event '{event_title_lower}'")
-            
-            actions = get_actions_for_automation(automation_id)
-            if not actions:
-                print(f"[Automation] Rule found, but it has no actions.")
-                return False
-            
-            # --- FIX: Store all created IDs ---
-            created_task_ids = []
-            created_event_ids = []
-            
-            # --- Run task actions FIRST ---
-            task_actions = [a for a in actions if a['action_type'] == 'ensure_task_link']
-            print(f"[Automation] Found {len(task_actions)} task action(s).")
-            for action in task_actions:
-                task_id = self._execute_automation_action(action, date_str, automation_id)
-                if task_id: 
-                    created_task_ids.append(task_id)
-                    actions_run = True
-                
-            # --- Run schedule actions SECOND ---
-            schedule_actions = [a for a in actions if a['action_type'] == 'create_schedule_block']
-            print(f"[Automation] Found {len(schedule_actions)} schedule action(s).")
-            for action in schedule_actions:
-                event_id = self._execute_automation_action(action, date_str, automation_id)
-                if event_id: 
-                    created_event_ids.append(event_id)
-                    actions_run = True
-                
-            # --- Link all created tasks to all created events ---
-            if created_task_ids and created_event_ids:
-                print(f"[Automation] Linking {len(created_task_ids)} task(s) to {len(created_event_ids)} event(s).")
-                for task_id in created_task_ids:
-                    for event_id in created_event_ids:
-                        try:
-                            link_task_to_event(task_id, event_id)
-                            print(f"[Automation]   > Linked task {task_id} to event {event_id}")
-                        except Exception as e:
-                            print(f"[Automation]   > FAILED to link task {task_id} to event {event_id}: {e}")
-        
-        return actions_run
-
+    # --- DELETED METHOD: _execute_automation_for_event_title ---
+    # The method _execute_automation_for_event_title that was
+    # here (lines 390-441 in the original file) has been removed. 
+    # Its logic is now part of the new `run_automations_for_event` method.
             
     def _execute_automation_action(self, action, date_str, automation_id):
         """ 
@@ -501,7 +505,7 @@ class MainWindow(QMainWindow):
                     return None
 
                 # --- FIX: Find task by automation_id *AND* description ---
-                # This lets one rule create multiple unique tasks.
+                # This lets one rule to create multiple unique tasks.
                 all_tasks = get_all_tasks()
                 existing_task = next((t for t in all_tasks 
                                       if t.get('created_by_automation_id') == automation_id 
