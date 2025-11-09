@@ -14,6 +14,13 @@ def main():
     Main function to initialize and run the QApplication.
     """
     app = QApplication(sys.argv)
+    
+    # --- NEW: Give the app a name ---
+    # This is what Windows will use in the Notification Settings
+    app.setApplicationName("TaskManager")
+    app.setApplicationDisplayName("Task Manager")
+    app.setOrganizationName("ALF")
+    # --- END NEW ---
 
     try:
         window = MainWindow(app)

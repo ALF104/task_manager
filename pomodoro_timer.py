@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from PySide6.QtWidgets import (
     QGroupBox, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, 
     QGraphicsView, QGraphicsScene, QApplication, QMessageBox,
@@ -8,11 +9,13 @@ from PySide6.QtGui import (
     QFont, QColor, QPen, QPainter, QPainterPath
 )
 from PySide6.QtCore import (
-    Qt, QRectF, QTimer, Slot
+    Qt, QRectF, QTimer, Slot,
+    Signal # <-- NEW IMPORT
 )
 
 # --- CORRECTED IMPORT ---
-from app.core.database import get_app_state
+from app.core.database import get_app_state, add_focus_log
+from app.widgets.dialogs_main import SelectFocusTaskDialog
 
 # --- Pomodoro Timer Widget ---
 class PomodoroTimerWidget(QGroupBox):
@@ -20,6 +23,9 @@ class PomodoroTimerWidget(QGroupBox):
     A self-contained widget for the Pomodoro Timer.
     Manages its own UI, state, and timer logic.
     """
+    # --- NEW: Signal for notifications (for Feature 3) ---
+    timer_finished = Signal(str, str) # title, message
+
     def __init__(self, parent=None):
         super().__init__(parent)
         
@@ -30,6 +36,7 @@ class PomodoroTimerWidget(QGroupBox):
         self.pomodoro_cycles = 0
         self.break_cycles = 0
         self.theme_mode = 'dark' # Default theme
+        self.current_focus_task_id = None # <-- NEW: For Feature 2
         
         # --- Load Settings ---
         self._load_settings_from_db() 
@@ -124,9 +131,27 @@ class PomodoroTimerWidget(QGroupBox):
         controls_stack.addStretch()
         self.setFixedSize(self.sizeHint())
 
-    # --- Pomodoro Timer Logic ---
+    # --- Pomodoro Timer Logic (MODIFIED) ---
     def _start_timer(self):
         if not self.pomodoro_running and self.timer_seconds > 0:
+            
+            # --- NEW: Ask for task to link ---
+            # Only ask for a task if it's a "Work" session
+            if self.timer_mode == "Work":
+                dialog = SelectFocusTaskDialog(self)
+                if dialog.exec():
+                    # User made a choice (Link or Unassigned)
+                    self.current_focus_task_id = dialog.get_selected_task_id()
+                    if self.current_focus_task_id:
+                        print(f"[Focus Mode] Starting timer linked to task: {self.current_focus_task_id}")
+                    else:
+                        print("[Focus Mode] Starting unassigned timer.")
+                else:
+                    # User cancelled (hit Esc or 'X')
+                    print("[FocusMode] Timer start cancelled.")
+                    return # Don't start the timer
+            # --- END NEW ---
+
             self.pomodoro_running = True
             self.start_button.setEnabled(False)
             self.pause_button.setEnabled(True)
@@ -144,7 +169,10 @@ class PomodoroTimerWidget(QGroupBox):
              self.pause_button.setEnabled(False)
              self.timer_minutes_entry.setEnabled(True)
              self.work_button.setEnabled(True) 
-             self.break_button.setEnabled(True) 
+             self.break_button.setEnabled(True)
+             # --- NEW ---
+             # Clear the linked task. If they resume, _start_timer will ask again.
+             self.current_focus_task_id = None
 
     def _reset_timer(self):
         """Resets the timer to its *current* mode's full time."""
@@ -154,6 +182,8 @@ class PomodoroTimerWidget(QGroupBox):
         self.start_button.setText("Start")
         self.start_button.setEnabled(True)
         self.pause_button.setEnabled(False)
+        # --- NEW ---
+        self.current_focus_task_id = None
 
     def _reset_timer_to_work(self):
         """Resets the timer specifically to a full Work session."""
@@ -161,6 +191,9 @@ class PomodoroTimerWidget(QGroupBox):
         self.timer_mode = "Work"
         self.timer_seconds = self.work_minutes * 60
         self.total_timer_seconds = self.work_minutes * 60
+        # --- NEW ---
+        self.current_focus_task_id = None
+        
         # Check if widget has been created yet
         if hasattr(self, 'timer_minutes_entry'):
             self.timer_minutes_entry.setText(str(self.work_minutes))
@@ -193,6 +226,8 @@ class PomodoroTimerWidget(QGroupBox):
         self.work_button.setEnabled(True)
         self.break_button.setEnabled(True)
         self._update_timer_mode_highlight()
+        # --- NEW ---
+        self.current_focus_task_id = None
 
     def _countdown(self):
         if self.pomodoro_running and self.timer_seconds > 0:
@@ -208,20 +243,43 @@ class PomodoroTimerWidget(QGroupBox):
             self.work_button.setEnabled(True)
             self.break_button.setEnabled(True)
             
-            if self.timer_mode == "Work":
-                self.pomodoro_cycles += 1
-                if self.pomodoro_cycles % self.sessions_before_long_break == 0:
-                    self._show_long_break_prompt()
-                else: 
-                    self._set_timer_preset(str(self.short_break_minutes), "Break")
-                    QMessageBox.information(self, "Pomodoro Complete", f"Time for a short break ({self.short_break_minutes} min)!")
-            elif self.timer_mode == "Break":
-                self.break_cycles += 1
-                self._set_timer_preset(str(self.work_minutes), "Work") 
-                QMessageBox.information(self, "Break Over", "Time to get back to work!")
+            try:
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                # Calculate duration in minutes from the *total* seconds of this session
+                logged_duration_minutes = int(self.total_timer_seconds / 60)
+            
+                if self.timer_mode == "Work":
+                    # --- MODIFIED: Log the *actual* duration from the timer ---
+                    add_focus_log(today_str, logged_duration_minutes, 'work', task_id=self.current_focus_task_id)
+                    print(f"[Focus Mode] Logged {logged_duration_minutes} min 'work' session for task: {self.current_focus_task_id}")
+                    # Reset the linked task for the next session
+                    self.current_focus_task_id = None
+                    # --- END MODIFIED ---
+                    
+                    self.pomodoro_cycles += 1
+                    if self.pomodoro_cycles % self.sessions_before_long_break == 0:
+                        self._show_long_break_prompt()
+                    else: 
+                        self._set_timer_preset(str(self.short_break_minutes), "Break")
+                        # --- MODIFIED: Emit signal instead of QMessageBox ---
+                        self.timer_finished.emit("Pomodoro Complete", f"Time for a short break ({self.short_break_minutes} min)!")
+                
+                elif self.timer_mode == "Break":
+                    # --- NEW: Log the break session ---
+                    add_focus_log(today_str, logged_duration_minutes, 'break')
+                    print(f"[Focus Mode] Logged {logged_duration_minutes} min 'break' session.")
+                    # --- END NEW ---
+                
+                    self.break_cycles += 1
+                    self._set_timer_preset(str(self.work_minutes), "Work") 
+                    # --- MODIFIED: Emit signal instead of QMessageBox ---
+                    self.timer_finished.emit("Break Over", "Time to get back to work!")
+            
+            except Exception as e:
+                print(f"Error logging focus session: {e}")
             
             self._update_timer_display() 
-            self._play_sound() 
+            self._play_sound() # <-- This provides the sound you wanted!
             
     def _update_timer_display(self):
         # Don't try to draw if the scene hasn't been created yet
@@ -311,6 +369,7 @@ class PomodoroTimerWidget(QGroupBox):
             self.break_button.setStyleSheet(active_style)
         
     def _show_long_break_prompt(self):
+         # This MUST remain a QMessageBox because it requires a user decision
          reply = QMessageBox.question(self, 'Long Break Time!', f"Completed {self.sessions_before_long_break} sessions. Start a long break ({self.long_break_minutes} min)?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes) 
          if reply == QMessageBox.StandardButton.Yes: 
              self._set_timer_preset(str(self.long_break_minutes), "Break")

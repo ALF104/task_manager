@@ -1,7 +1,7 @@
 import sys
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import uuid
 import csv
 import calendar
@@ -9,17 +9,28 @@ import calendar
 # --- Database Functions ---
 
 def get_data_file_path(filename):
-    """ 
-    Get the absolute path to the data file, works for both script and executable.
-    It resolves the path relative to the project root, not the current file's directory.
     """
-    # Go up two directories from 'app/core' to get to the project root
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    Get the absolute path to a writable data file.
+    This is now "portable-aware" and will save the file
+    next to the .exe or the run.py script.
+    """
+    # Check if the app is running as a compiled executable
+    if getattr(sys, 'frozen', False):
+        # We are running as a compiled .exe
+        # sys.executable is the path to the .exe
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # We are running as a .py script
+        # __file__ is app/core/database.py. Go up two levels to 4.0/
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    # Return the full path to the data file in that base directory
     return os.path.join(base_dir, filename)
 
 DATABASE_FILE = get_data_file_path("task_manager.db")
 
 def connect_db():
+# ... (rest of the file is identical) ...
     """Establishes a connection to the database."""
     conn = sqlite3.connect(DATABASE_FILE, timeout=10) 
     conn.row_factory = sqlite3.Row # Allows accessing columns by name
@@ -28,10 +39,8 @@ def connect_db():
 def create_tables():
     """Creates the necessary tables if they don't already exist."""
     conn = connect_db()
+    conn.execute("PRAGMA foreign_keys = ON;") # Ensure foreign keys are enabled
     cursor = conn.cursor()
-    
-    # --- Enable Foreign Key support ---
-    cursor.execute("PRAGMA foreign_keys = ON;")
     
     # --- Tasks Table (MODIFIED) ---
     cursor.execute("""
@@ -41,7 +50,7 @@ def create_tables():
         notes TEXT, date_completed TEXT, schedule_event_id TEXT,
         created_by_automation_id TEXT,
         show_mode TEXT DEFAULT 'auto' NOT NULL,  /* 'auto' or 'always_pending' */
-        parent_task_id TEXT, /* <-- NEW COLUMN FOR SUB-TASKS */
+        parent_task_id TEXT, /* <-- NEW: For sub-tasks */
         FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE
     )""")
     # --- Daily Notes Table ---
@@ -126,14 +135,26 @@ def create_tables():
         content TEXT,
         FOREIGN KEY (parent_id) REFERENCES knowledge_base (id) ON DELETE CASCADE
     )""")
+    
+    # --- NEW: Focus Log Table (for Feature 2) ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS focus_log (
+        id TEXT PRIMARY KEY,
+        task_id TEXT,
+        date_completed TEXT NOT NULL,
+        duration_minutes INTEGER NOT NULL,
+        session_type TEXT NOT NULL, /* 'work' or 'break' */
+        notes TEXT,
+        FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
+    )""")
 
     
     conn.commit()
     conn.close()
 
-# ========== Task Functions ==========
+# ========== Task Functions (MODIFIED for Sub-tasks) ==========
 def add_task(task_data):
-    """ Adds a new task, returns the new task's ID. (MODIFIED) """
+    """ Adds a new task, returns the new task's ID. """
     conn = connect_db()
     cursor = conn.cursor()
     cursor.execute("""
@@ -143,16 +164,19 @@ def add_task(task_data):
                    (task_data['id'], task_data['description'], 'pending', task_data['date_added'], 
                     task_data['deadline'], task_data['priority'], task_data['category'], 
                     task_data['notes'], task_data.get('created_by_automation_id'),
-                    task_data.get('show_mode', 'auto'), task_data.get('parent_task_id'))) # <-- ADDED
+                    task_data.get('show_mode', 'auto'),
+                    task_data.get('parent_task_id') )) # <-- NEW
     conn.commit()
     conn.close()
     return task_data['id'] 
 
 def get_tasks(status="pending"):
-    """ Gets all TOP-LEVEL pending tasks. (MODIFIED) """
+    """
+    Gets tasks of a given status.
+    MODIFIED: Now *only* returns top-level tasks.
+    """
     conn = connect_db()
     cursor = conn.cursor()
-    # This now *only* gets parent tasks (or standalone tasks)
     cursor.execute("SELECT * FROM tasks WHERE status = ? AND parent_task_id IS NULL ORDER BY date_added", (status,))
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
@@ -166,54 +190,26 @@ def get_all_tasks():
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
-
-# --- NEW FUNCTION for sub-tasks ---
-def get_sub_tasks(parent_task_id, status="all"):
-    """ Gets all sub-tasks for a given parent task_id. """
+    
+# --- NEW: Get all pending tasks (parents and sub-tasks) ---
+def get_all_pending_tasks():
+    """ Fetches all pending tasks, including sub-tasks. """
     conn = connect_db()
     cursor = conn.cursor()
-    
-    query = "SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY date_added"
-    params = [parent_task_id]
-    
-    if status != "all":
-        query = "SELECT * FROM tasks WHERE parent_task_id = ? AND status = ? ORDER BY date_added"
-        params.append(status)
-        
-    cursor.execute(query, tuple(params))
+    cursor.execute("SELECT * FROM tasks WHERE status = 'pending' ORDER BY parent_task_id, date_added")
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
 
-# --- NEW FUNCTION for sub-tasks ---
-def get_pending_subtask_count(task_id):
-    """ Returns the number of pending sub-tasks for a given task. """
-    conn = connect_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM tasks WHERE parent_task_id = ? AND status = 'pending'", (task_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else 0
-    
-# --- NEW FUNCTION for Today Dashboard fix ---
+# --- NEW: Get a single task by its ID ---
 def get_task_by_id(task_id):
-    """ Gets a single task by its ID. """
+    """ Fetches a single task by its ID. """
     conn = connect_db()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
-
-# --- NEW FUNCTION for Schedule Dialog fix ---
-def get_all_pending_tasks():
-    """ Gets all pending tasks, including parents and sub-tasks. """
-    conn = connect_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE status = 'pending' ORDER BY date_added",)
-    tasks = [dict(row) for row in cursor.fetchall()]
-    conn.close()
-    return tasks
 
 def get_task_by_automation_id(automation_id):
     """ Finds the first task that was created by a specific automation rule. """
@@ -265,7 +261,7 @@ def update_task_details(task_id, description, priority, category, deadline, note
 
 def delete_task(task_id):
     conn = connect_db()
-    conn.execute("PRAGMA foreign_keys = ON;") # Ensure cascade delete is on
+    conn.execute("PRAGMA foreign_keys = ON;") # <-- NEW: Ensure cascade delete works
     cursor = conn.cursor()
     cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
     conn.commit()
@@ -350,6 +346,33 @@ def is_task_logged_complete(task_id, date_str):
     row = cursor.fetchone()
     conn.close()
     return row is not None
+
+# --- NEW: Sub-task specific functions ---
+
+def get_sub_tasks(parent_task_id, status="all"):
+    """
+    Gets sub-tasks for a given parent_task_id.
+    status: 'all', 'pending', or 'completed'
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    if status == "all":
+        cursor.execute("SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY date_added", (parent_task_id,))
+    else:
+        cursor.execute("SELECT * FROM tasks WHERE parent_task_id = ? AND status = ? ORDER BY date_added", (parent_task_id, status))
+    tasks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tasks
+
+def get_pending_subtask_count(task_id):
+    """ Counts *only* the pending sub-tasks for a given task. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(id) FROM tasks WHERE parent_task_id = ? AND status = 'pending'", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
+
 
 # --- Task Show Date Functions ---
 def add_task_show_date(task_id, show_date, db_conn=None):
@@ -485,7 +508,6 @@ def update_schedule_event(event_id, event_data):
 def delete_schedule_event(event_id):
     """Deletes an event and unlinks associated tasks within a single transaction."""
     conn = connect_db()
-    conn.execute("PRAGMA foreign_keys = ON;") # Ensure cascade delete is on
     cursor = conn.cursor()
     try:
         cursor.execute("DELETE FROM schedule_events WHERE id = ?", (event_id,))
@@ -730,3 +752,218 @@ def delete_kb_topic(topic_id):
     cursor.execute("DELETE FROM knowledge_base WHERE id = ?", (topic_id,))
     conn.commit()
     conn.close()
+
+# --- NEW: Functions for KB Search ---
+def get_all_kb_topics_map():
+    """
+    Fetches all KB topics and returns them as a dictionary
+    keyed by topic_id for easy parent lookup.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, parent_id, title FROM knowledge_base")
+    # { 'id-123': {'id': 'id-123', 'parent_id': 'id-abc', 'title': '...'} }
+    topic_map = {row['id']: dict(row) for row in cursor.fetchall()}
+    conn.close()
+    return topic_map
+
+def search_kb_topics(search_term):
+    """
+    Searches topic titles and content for a given search term.
+    Returns a list of matching topic_ids.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    # Add wildcards for the LIKE query
+    query_term = f"%{search_term}%"
+    
+    # We select from a UNION to avoid duplicates
+    # We search titles first, then content
+    cursor.execute("""
+        SELECT id FROM knowledge_base
+        WHERE title LIKE ?
+        UNION
+        SELECT id FROM knowledge_base
+        WHERE content LIKE ?
+    """, (query_term, query_term))
+    
+    # Return a simple set of matching IDs
+    topic_ids = {row['id'] for row in cursor.fetchall()}
+    conn.close()
+    return topic_ids
+# --- END NEW ---
+
+# ========== Focus Log Functions (MODIFIED) ==========
+
+def add_focus_log(date_str, duration, session_type, task_id=None, notes=None):
+    """
+    Logs a completed Pomodoro session (work or break).
+    task_id is optional.
+    """
+    conn = connect_db()
+    try:
+        cursor = conn.cursor()
+        new_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO focus_log (id, task_id, date_completed, duration_minutes, session_type, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (new_id, task_id, date_str, duration, session_type, notes))
+        conn.commit()
+    except Exception as e:
+         print(f"Error adding focus log: {e}")
+         conn.rollback()
+         raise
+    finally:
+        conn.close()
+
+def get_focus_logs_for_date(date_str):
+    """
+    Gets all focus logs for a given date, joining with task description.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    # Use COALESCE to show 'Unassigned' if task_id is NULL
+    cursor.execute("""
+        SELECT
+            fl.id, fl.task_id, fl.date_completed, fl.duration_minutes, 
+            fl.session_type, fl.notes,
+            COALESCE(t.description, 'Unassigned') AS task_description
+        FROM focus_log fl
+        LEFT JOIN tasks t ON fl.task_id = t.id
+        WHERE fl.date_completed = ?
+        ORDER BY fl.id
+    """, (date_str,))
+    logs = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return logs
+
+def update_focus_log_notes(log_id, notes):
+    """ Adds or updates the notes for a specific focus log entry. """
+    conn = connect_db()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE focus_log SET notes = ? WHERE id = ?", (notes, log_id))
+        conn.commit()
+    except Exception as e:
+         print(f"Error updating focus log notes: {e}")
+         conn.rollback()
+         raise
+    finally:
+        conn.close()
+
+def get_total_focus_time_for_task(task_id):
+    """
+    Gets the total *work* minutes logged for a specific task.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    # --- MODIFIED: Ensure we only sum 'work' sessions ---
+    cursor.execute("SELECT SUM(duration_minutes) FROM focus_log WHERE task_id = ? AND session_type = 'work'", (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row and row[0] is not None else 0
+
+# --- MODIFIED: Functions for Statistics Dialog ---
+
+def get_focus_time_by_task_for_range(start_date, end_date):
+    """
+    Gets the total work time per task within a date range.
+    Returns a list of dicts with full task info and total_minutes.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    # We join with tasks to get the status, description, etc.
+    cursor.execute("""
+        SELECT
+            t.status,
+            COALESCE(t.description, 'Unassigned') AS description,
+            SUM(fl.duration_minutes) AS total_minutes
+        FROM focus_log fl
+        LEFT JOIN tasks t ON fl.task_id = t.id
+        WHERE fl.date_completed BETWEEN ? AND ?
+        AND fl.session_type = 'work'
+        GROUP BY fl.task_id, t.status, t.description
+        ORDER BY total_minutes DESC
+    """, (start_date, end_date))
+    data = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return data
+
+def get_tasks_completed_summary_for_range(start_date, end_date):
+    """
+    Gets the count of completed tasks for each day, week, month, year
+    in a given date range.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    
+    # We only need one query, grouping by different date formats
+    cursor.execute("""
+        SELECT
+            STRFTIME('%Y-%m-%d', date_completed) AS by_day,
+            STRFTIME('%Y-W%W', date_completed) AS by_week,
+            STRFTIME('%Y-%m', date_completed) AS by_month,
+            STRFTIME('%Y', date_completed) AS by_year,
+            COUNT(id) AS task_count
+        FROM tasks
+        WHERE date_completed BETWEEN ? AND ?
+        GROUP BY by_day, by_week, by_month, by_year
+        ORDER BY by_day ASC
+    """, (start_date, end_date))
+    
+    # Process the data into the formats we need
+    daily_stats = {}
+    weekly_stats = {}
+    monthly_stats = {}
+    yearly_stats = {}
+    
+    rows = cursor.fetchall()
+    for row in rows:
+        # Sum up the counts for each period
+        day_key = row['by_day']
+        daily_stats[day_key] = daily_stats.get(day_key, 0) + row['task_count']
+        
+        week_key = row['by_week']
+        weekly_stats[week_key] = weekly_stats.get(week_key, 0) + row['task_count']
+        
+        month_key = row['by_month']
+        monthly_stats[month_key] = monthly_stats.get(month_key, 0) + row['task_count']
+        
+        year_key = row['by_year']
+        yearly_stats[year_key] = yearly_stats.get(year_key, 0) + row['task_count']
+
+    conn.close()
+    
+    # Return a dictionary of dictionaries
+    return {
+        "daily": daily_stats,
+        "weekly": weekly_stats,
+        "monthly": monthly_stats,
+        "yearly": yearly_stats
+    }
+
+def get_focus_time_summary_for_range(start_date, end_date):
+    """
+    Gets the total work time and break time in a date range.
+    Returns a dict: {'work': total_work_min, 'break': total_break_min}
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            session_type,
+            SUM(duration_minutes) AS total_minutes
+        FROM focus_log
+        WHERE date_completed BETWEEN ? AND ?
+        GROUP BY session_type
+    """, (start_date, end_date))
+    
+    summary = {'work': 0, 'break': 0}
+    for row in cursor.fetchall():
+        if row['session_type'] == 'work':
+            summary['work'] = row['total_minutes']
+        elif row['session_type'] == 'break':
+            summary['break'] = row['total_minutes']
+            
+    conn.close()
+    return summary

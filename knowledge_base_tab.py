@@ -2,7 +2,8 @@ import uuid
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTextEdit, QMessageBox, QInputDialog, QTreeWidget,
-    QTreeWidgetItem, QSplitter, QToolBar
+    QTreeWidgetItem, QSplitter, QToolBar,
+    QLineEdit, QTreeWidgetItemIterator # <-- NEW IMPORT
 )
 from PySide6.QtGui import (
     QFont, QTextCharFormat, QColor, QTextListFormat  # Import QTextListFormat
@@ -14,7 +15,8 @@ from PySide6.QtCore import (
 # --- Import from our new structure ---
 from app.core.database import (
     add_kb_topic, get_kb_topics_by_parent, update_kb_topic_note,
-    delete_kb_topic, get_kb_topic_note
+    delete_kb_topic, get_kb_topic_note,
+    get_all_kb_topics_map, search_kb_topics # <-- NEW IMPORTS
 )
 
 # --- Knowledge Base Tab Widget ---
@@ -29,13 +31,16 @@ class KnowledgeBaseTab(QWidget):
         # --- Member Variables ---
         self.current_topic_id = None
         self.is_loading = False # Flag to prevent saving while loading
+        self.all_topics_map = {} # <-- NEW: Cache for all topics
+        self.current_search_text = "" # <-- NEW: Store search state
+        self.original_matching_ids = set() # <-- NEW: For highlighting
 
         # --- Setup UI ---
         # All UI elements are created here
         self._setup_ui() 
 
         # --- Load Initial Data ---
-        self._load_topics()
+        self._load_full_topic_map_and_tree() # <-- MODIFIED: Load cache first
 
     # --- Formatting Helpers ---
     # These methods are defined *before* _setup_ui connects to them
@@ -78,6 +83,13 @@ class KnowledgeBaseTab(QWidget):
         tree_widget = QWidget()
         tree_layout = QVBoxLayout(tree_widget)
         tree_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # --- NEW: Search Bar ---
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("Search topics and notes...")
+        self.search_bar.textChanged.connect(self._on_search_changed)
+        tree_layout.addWidget(self.search_bar)
+        # --- END NEW ---
         
         self.topic_tree = QTreeWidget()
         self.topic_tree.setHeaderLabel("Topics")
@@ -140,6 +152,18 @@ class KnowledgeBaseTab(QWidget):
         splitter.setSizes([250, 600])
 
     # --- Data and Logic Methods ---
+    
+    def _load_full_topic_map_and_tree(self):
+        """
+        NEW: Caches all topics in a map, then loads the full tree.
+        """
+        try:
+            self.all_topics_map = get_all_kb_topics_map()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load topic map: {e}")
+            self.all_topics_map = {}
+            
+        self._load_topics() # Now, build the tree
 
     def _load_topics(self, parent_item=None, parent_id=None):
         """Recursively loads topics from the database into the tree."""
@@ -148,8 +172,16 @@ class KnowledgeBaseTab(QWidget):
             parent_item = self.topic_tree.invisibleRootItem()
         
         try:
-            topics = get_kb_topics_by_parent(parent_id)
-            for topic in topics:
+            # Get children for this parent_id
+            # We can use a list comprehension on our cached map for speed
+            children = [
+                topic for topic in self.all_topics_map.values() 
+                if topic.get('parent_id') == parent_id
+            ]
+            # Sort them by title
+            children.sort(key=lambda t: t.get('title', ''))
+
+            for topic in children:
                 item = QTreeWidgetItem(parent_item, [topic['title']])
                 item.setData(0, Qt.ItemDataRole.UserRole, topic['id']) # Store ID in the item
                 # Recursively load children
@@ -226,7 +258,8 @@ class KnowledgeBaseTab(QWidget):
         if ok and text:
             try:
                 add_kb_topic(text, parent_id=None)
-                self._load_topics() # Full refresh
+                self._load_full_topic_map_and_tree() # Full refresh of cache and tree
+                self.search_bar.clear() # Clear search
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not add topic: {e}")
 
@@ -244,10 +277,17 @@ class KnowledgeBaseTab(QWidget):
         if ok and text:
             try:
                 add_kb_topic(text, parent_id=parent_id)
-                # Refresh just this branch
-                parent_item.takeChildren() # Clear old children
-                self._load_topics(parent_item, parent_id)
-                parent_item.setExpanded(True)
+                # Full refresh of cache and tree
+                self._load_full_topic_map_and_tree() 
+                self.search_bar.clear() # Clear search
+                
+                # --- NEW: Re-select the parent item after reload ---
+                self._find_and_select_item(parent_id)
+                new_parent_item = self.topic_tree.currentItem()
+                if new_parent_item:
+                    new_parent_item.setExpanded(True)
+                # --- END NEW ---
+
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not add subtopic: {e}")
 
@@ -269,8 +309,102 @@ class KnowledgeBaseTab(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 delete_kb_topic(topic_id)
-                self._load_topics() # Full refresh
+                self._load_full_topic_map_and_tree() # Full refresh
+                self.search_bar.clear() # Clear search
                 self.note_editor.clear()
                 self.note_editor.setEnabled(False)
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Could not delete topic: {e}")
+
+    # --- NEW: Search Logic Methods ---
+    
+    def _find_and_select_item(self, topic_id_to_find):
+        """ Helper to find and select an item in the tree by its ID. """
+        if not topic_id_to_find:
+            return None
+        
+        # Iterate through all top-level items and their children
+        iterator = QTreeWidgetItemIterator(self.topic_tree)
+        while iterator.value():
+            item = iterator.value()
+            item_id = item.data(0, Qt.ItemDataRole.UserRole)
+            if item_id == topic_id_to_find:
+                self.topic_tree.setCurrentItem(item)
+                return item
+            iterator += 1
+        return None
+
+    def _on_search_changed(self, text):
+        """Filters the tree based on the search text."""
+        self.current_search_text = text.strip()
+        
+        if not self.current_search_text:
+            # No search text, restore the full tree
+            self.original_matching_ids = set()
+            self._load_topics() # Load from cache
+            return
+            
+        try:
+            # 1. Get IDs of topics that match the search
+            self.original_matching_ids = search_kb_topics(self.current_search_text)
+            if not self.original_matching_ids:
+                self.topic_tree.clear() # No matches
+                return
+                
+            # 2. Get all parent IDs for those matches
+            ids_to_show = self._get_all_parent_ids_for_matches(self.original_matching_ids)
+            
+            # 3. Rebuild the tree, showing only those IDs
+            self._build_filtered_tree(ids_to_show)
+            
+        except Exception as e:
+            print(f"Error during search: {e}")
+            
+    def _get_all_parent_ids_for_matches(self, matching_ids):
+        """
+        Takes a set of matching IDs and returns a new set containing
+        all those IDs *plus* all their parent/grandparent/etc. IDs.
+        """
+        show_set = set()
+        for topic_id in matching_ids:
+            current_id = topic_id
+            while current_id:
+                if current_id in show_set: # Stop if we've already traced this path
+                    break
+                show_set.add(current_id)
+                topic = self.all_topics_map.get(current_id)
+                current_id = topic.get('parent_id') if topic else None
+        return show_set
+
+    def _build_filtered_tree(self, ids_to_show, parent_item=None, parent_id=None):
+        """
+        Recursively rebuilds the tree, but only adds items
+        if their ID is in the `ids_to_show` set.
+        """
+        if parent_item is None:
+            self.topic_tree.clear()
+            parent_item = self.topic_tree.invisibleRootItem()
+
+        # Find all children of parent_id that are in our set
+        children = [
+            topic for topic in self.all_topics_map.values()
+            if topic.get('parent_id') == parent_id and topic.get('id') in ids_to_show
+        ]
+        children.sort(key=lambda t: t.get('title', ''))
+
+        for topic in children:
+            item = QTreeWidgetItem(parent_item, [topic['title']])
+            item.setData(0, Qt.ItemDataRole.UserRole, topic['id'])
+            
+            # --- NEW: Highlight direct matches ---
+            if topic['id'] in self.original_matching_ids:
+                font = item.font(0)
+                font.setBold(True)
+                item.setFont(0, font)
+            # --- END NEW ---
+
+            # Recurse
+            self._build_filtered_tree(ids_to_show, item, topic['id'])
+            
+            # Expand all items in the filtered view
+            parent_item.setExpanded(True)

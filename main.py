@@ -13,14 +13,16 @@ from PySide6.QtWidgets import (
     QFileDialog, QSizePolicy, QSpacerItem, QCalendarWidget,
     QGraphicsView, QGraphicsScene, QGraphicsLineItem,
     QGraphicsPathItem, QGroupBox, QToolBar, QTextEdit,
-    QGraphicsTextItem, QDialog, QDialogButtonBox
+    QGraphicsTextItem, QDialog, QDialogButtonBox,
+    QSystemTrayIcon, QStyle 
 )
 from PySide6.QtGui import (
     QFont, QPainter, QColor, QPen, QTextCharFormat,
-    QPainterPath
+    QPainterPath,
+    QIcon, QPixmap 
 )
 from PySide6.QtCore import (
-    Qt, QTimer, QTime, QDate, QRectF, QEvent, Signal
+    Qt, QTimer, QTime, QDate, QRectF, QEvent, Signal, Slot 
 )
 
 # --- Import from our new structure ---
@@ -55,6 +57,11 @@ from app import APP_VERSION
 
 # --- Main Window Class ---
 class MainWindow(QMainWindow):
+    
+    # --- NEW: Constant for schedule check ---
+    # We'll notify at 15, 5, and 0 minutes (at start time)
+    SCHEDULE_NOTIFY_WINDOWS = [15, 5, 0]
+
     def __init__(self, app):
         super().__init__()
         
@@ -67,6 +74,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Database Error", f"Failed to create database tables: {e}\n\nPlease check file permissions.")
             sys.exit(1) # Exit if we can't even make the tables
         
+        # --- Load the app icon ---
+        self.app_icon = self._load_app_icon()
+        self.setWindowIcon(self.app_icon)
+        
+        self._setup_tray_icon()
         self._update_window_title() 
         self.setGeometry(100, 100, 1100, 800) 
         
@@ -74,6 +86,9 @@ class MainWindow(QMainWindow):
         self.selected_deadline = None 
         self.view_mode = "pending" 
         self.current_tab_index = 0
+        self.current_app_date = QDate.currentDate()
+        # --- MODIFIED: Use a dict to track *which* notifications were sent ---
+        self.notified_event_windows = {} # e.g., {'event_id': {15, 5}}
         
         # --- Central Widget and Layout ---
         central_widget = QWidget()
@@ -126,6 +141,10 @@ class MainWindow(QMainWindow):
         
         # --- Setup Persistent Timer UI ---
         self.persistent_timer_frame = PomodoroTimerWidget(self)
+        
+        # --- Connect timer signal to notification slot ---
+        self.persistent_timer_frame.timer_finished.connect(self._show_notification)
+        
         timer_wrapper_layout = QHBoxLayout()
         timer_wrapper_layout.addWidget(self.persistent_timer_frame)
         timer_wrapper_layout.addStretch(1)
@@ -138,7 +157,14 @@ class MainWindow(QMainWindow):
         self.datetime_timer = QTimer(self)
         self.datetime_timer.timeout.connect(self._update_date_time_label)
         self.datetime_timer.start(1000) 
-        self._update_date_time_label() 
+        self._update_date_time_label()
+        
+        # --- NEW: Master Clock for Schedule Notifications ---
+        self.schedule_notification_timer = QTimer(self)
+        self.schedule_notification_timer.timeout.connect(self._check_schedule_notifications)
+        self.schedule_notification_timer.start(60000) # Check every 60 seconds
+        QTimer.singleShot(1000, self._check_schedule_notifications) # Check once on startup
+        # --- END NEW ---
         
         # --- Run Automations ---
         # Run *after* all UI is loaded, on a single-shot timer
@@ -204,6 +230,71 @@ class MainWindow(QMainWindow):
         if hasattr(self, 'task_manager_tab'):
             self.task_manager_tab._display_tasks()
 
+    # --- METHODS FOR SYSTEM TRAY (MODIFIED) ---
+    
+    def _load_app_icon(self):
+        """Loads the app icon from resources, provides a fallback."""
+        icon = QIcon() # Start with a blank icon
+        
+        # --- 1. Try to load your custom icon.ico ---
+        try:
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            resources_dir = os.path.join(os.path.dirname(current_dir), 'resources')
+            icon_path = os.path.join(resources_dir, 'icon.ico') # <-- CHECKING FOR .ico
+            if os.path.exists(icon_path):
+                print(f"Found custom icon at: {icon_path}")
+                icon = QIcon(icon_path)
+            else:
+                print(f"Warning: 'icon.ico' not found at {icon_path}")
+        except Exception as e:
+            print(f"Error loading custom icon: {e}")
+
+        # --- 2. Fallback: Create a generic icon if custom one failed ---
+        # This GUARANTEES the tray icon is visible.
+        if icon.isNull():
+            print("No custom icon found. Creating fallback icon.")
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(Qt.GlobalColor.darkGray) # A simple gray square
+            icon = QIcon(pixmap)
+        
+        return icon
+
+    def _setup_tray_icon(self):
+        """Initializes the QSystemTrayIcon."""
+        # Re-use the app_icon that was loaded during __init__
+        self.tray_icon = QSystemTrayIcon(self.app_icon, self)
+        self.tray_icon.setToolTip("Task Manager")
+        self.tray_icon.show()
+        print(f"Tray icon created. Is it visible? {self.tray_icon.isVisible()}")
+
+    @Slot(str, str)
+    def _show_notification(self, title, message):
+        """Shows a system tray notification."""
+        
+        print(f"[Notification] Slot triggered! Title: {title}, Message: {message}")
+        
+        if not hasattr(self, 'tray_icon'):
+            print("[Notification] Error: self.tray_icon object does not exist!")
+            return
+            
+        print(f"[Notification] Tray icon visible? {self.tray_icon.isVisible()}")
+
+        # We will try to show the message regardless of visibility
+        self.tray_icon.showMessage(
+            title,
+            message,
+            QSystemTrayIcon.MessageIcon.Information,
+            5000 # Show for 5 seconds
+        )
+        
+        # --- FALLBACK ---
+        # If it's still not visible, it means the tray icon itself
+        # failed to show. We'll use a QMessageBox as a backup.
+        if not self.tray_icon.isVisible():
+            print("[Notification] Fallback: Tray icon not visible. Showing QMessageBox.")
+            QMessageBox.information(self, title, message)
+    # --- END NEW ---
+
     def _update_window_title(self):
         """Sets the window title based on the user's name in settings."""
         user_name = get_app_state('user_name') or ''
@@ -215,6 +306,15 @@ class MainWindow(QMainWindow):
     def _update_date_time_label(self):
         now = datetime.now()
         self.date_time_label.setText(now.strftime("%A, %b %d, %Y | %I:%M:%S %p"))
+        
+        # --- NEW: Check if the day has rolled over ---
+        today = QDate.currentDate()
+        if today != self.current_app_date:
+            print(f"New day detected. Resetting notification log for {today.toString()}.")
+            self.current_app_date = today
+            # --- MODIFIED: Clear the new tracking dict ---
+            self.notified_event_windows.clear()
+        # --- END NEW ---
         
     def _on_tab_changed(self, index):
         """ Handle actions when the selected tab changes. """
@@ -305,7 +405,7 @@ class MainWindow(QMainWindow):
             # Ensure all potential headers are included
             headers = ['id', 'description', 'status', 'priority', 'category', 'deadline', 
                        'date_added', 'date_completed', 'notes', 'schedule_event_id',
-                       'created_by_automation_id', 'show_mode']
+                       'created_by_automation_id', 'show_mode', 'parent_task_id'] # <-- Added new header
 
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=headers, extrasaction='ignore')
@@ -368,7 +468,78 @@ class MainWindow(QMainWindow):
         styled_html = f"<style>{style}</style><body>{html_content}</body>"
         text_browser_widget.setHtml(styled_html)
         
-    # --- NEW METHOD: Reusable automation runner (added for bugfix) ---
+    # --- MODIFIED: Schedule Notification Checker ---
+    @Slot()
+    def _check_schedule_notifications(self):
+        """
+        Called by a QTimer every minute to check for upcoming schedule events.
+        """
+        try:
+            today_str = self.current_app_date.toString("yyyy-MM-dd")
+            current_time = datetime.now().time()
+            
+            events_today = get_schedule_events_for_date(today_str)
+            if not events_today:
+                return # No events to check
+
+            for event in events_today:
+                event_id = event['id']
+                start_time_str = event['start_time']
+                
+                try:
+                    event_time = time.fromisoformat(start_time_str)
+                except ValueError:
+                    print(f"Invalid time format in schedule: {start_time_str}")
+                    continue
+                
+                # Get the set of notifications already sent for this event
+                sent_windows = self.notified_event_windows.setdefault(event_id, set())
+                
+                # Calculate time difference in minutes
+                time_diff_seconds = (datetime.combine(date.today(), event_time) - 
+                                     datetime.combine(date.today(), current_time)).total_seconds()
+                minutes_until_event = time_diff_seconds / 60
+                
+                # --- NEW: Loop through all notification windows ---
+                for window_minutes in self.SCHEDULE_NOTIFY_WINDOWS:
+                    
+                    # Check if this window is in range AND has not been sent
+                    
+                    # Special case for "0 minutes" (at start time)
+                    # We give it a 1-minute grace period *after* start time
+                    # in case the timer ticks at 08:00:01 for an 08:00:00 event.
+                    is_in_window = False
+                    if window_minutes == 0:
+                        if -1 < minutes_until_event <= 0:
+                            is_in_window = True
+                    else:
+                        if window_minutes - 1 < minutes_until_event <= window_minutes:
+                            is_in_window = True
+
+                    if is_in_window and window_minutes not in sent_windows:
+                        
+                        # --- Create notification message ---
+                        title = ""
+                        message = ""
+                        if window_minutes == 0:
+                            title = "Event Starting Now"
+                            message = f"{event['title']} is starting now at {start_time_str}."
+                        else:
+                            title = f"Event Starting in {window_minutes} Minutes"
+                            message = f"{event['title']} is starting at {start_time_str}."
+                        
+                        print(f"[Notification] Sending: {title}")
+                        self._show_notification(title, message)
+                        QApplication.beep() 
+                        
+                        # Add to set to prevent re-notifying for this window
+                        sent_windows.add(window_minutes)
+
+        except Exception as e:
+            print(f"Error checking schedule notifications: {e}")
+    # --- END MODIFIED ---
+
+    # --- Reusable automation runner (added for bugfix) ---
     def run_automations_for_event(self, event_title, event_date_str):
         """
         Checks a specific event title and date against all automation rules
@@ -438,10 +609,9 @@ class MainWindow(QMainWindow):
             
         return actions_run
 
-    # --- REPLACED METHOD: Now uses the new reusable runner (changed for bugfix) ---
     def _run_startup_automations(self):
         """ Checks today's events and runs any matching automations. """
-        today_str = datetime.now().strftime("%Y-%m-%d")
+        today_str = datetime.now().strftime("%Y-m-%d")
         
         last_run = get_app_state('last_automation_run_date')
         if last_run == today_str:
@@ -475,25 +645,10 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Automation Error", f"Error during startup automations: {e}")
             
-    # --- DELETED METHOD: _execute_automation_for_event_title ---
-    # The method _execute_automation_for_event_title that was
-    # here (lines 390-441 in the original file) has been removed. 
-    # Its logic is now part of the new `run_automations_for_event` method.
-            
     def _execute_automation_action(self, action, date_str, automation_id):
         """ 
         Executes a single automation action for a specific date.
         Returns the ID of the newly created item, or None.
-        
-        *** FIX for Issue #4 ***: 
-        -   The logic for 'ensure_task_link' was flawed. It should
-            find a task by *automation_id AND description* to allow
-            one rule to create multiple *different* tasks.
-        -   This is a complex change. For now, the simplest fix is to
-            find *any* task by that automation_id. A better long-term
-            fix would be to store the action_id in the task.
-        -   Let's stick to the original logic (find *a* task by automation_id)
-            but ensure the logging is clear.
         """
         action_type = action.get('action_type')
         
@@ -505,7 +660,6 @@ class MainWindow(QMainWindow):
                     return None
 
                 # --- FIX: Find task by automation_id *AND* description ---
-                # This lets one rule to create multiple unique tasks.
                 all_tasks = get_all_tasks()
                 existing_task = next((t for t in all_tasks 
                                       if t.get('created_by_automation_id') == automation_id 
@@ -527,7 +681,8 @@ class MainWindow(QMainWindow):
                         "category": action.get('param3', 'Automation'), 
                         "notes": "Auto-generated by automation rule.",
                         "created_by_automation_id": automation_id,
-                        "show_mode": "auto" # Default show mode
+                        "show_mode": "auto", # Default show mode
+                        "parent_task_id": None # Always create as top-level
                     }
                     task_id = add_task(new_task)
                     if task_id:

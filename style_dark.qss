@@ -148,6 +148,7 @@ QToolBar QToolButton:checked {
 #taskFrame {
     border-radius: 4px;
     background-color: #343638; /* Default */
+    border: none;
 }
 #taskFrame[priority="High"] {
     background-color: #4E3434; /* Dark Red */
@@ -159,20 +160,42 @@ QToolBar QToolButton:checked {
     background-color: #334633; /* Dark Green */
 }
 
-/* Specific to TodayTaskWidget (Dark) - MODIFIED */
+/* Specific to TodayTaskWidget (Dark) */
 #todayTaskFrame {
     border-radius: 4px;
     background-color: #343638; /* Dark background */
+    border: 1px solid #4A4D50;
     padding: 2px;
 }
-/* --- NEW STYLES --- */
 #todayTaskFrame[priority="High"] {
-    background-color: #4E3434; /* Dark Red */
+    background-color: #4E3434;
 }
 #todayTaskFrame[priority="Medium"] {
-    background-color: #4D462E; /* Dark Yellow */
+    background-color: #4D462E;
 }
 #todayTaskFrame[priority="Low"] {
-    background-color: #334633; /* Dark Green */
+    background-color: #334633;
 }
-/* --- END NEW STYLES --- */
+
+/* --- NEW: Table Styling --- */
+QTableWidget {
+    border: 1px solid #4A4D50;
+    gridline-color: #4A4D50;
+    background-color: #343638;
+    color: white;
+}
+QHeaderView::section {
+    background-color: #4A4D50;
+    color: white;
+    padding: 5px;
+    border: 1px solid #4A4D50;
+    font-weight: bold;
+}
+QHeaderView::section:vertical {
+    background-color: #343638;
+    border-right: 1px solid #4A4D50;
+}
+QTableCornerButton::section {
+    background-color: #343638;
+    border: 1px solid #4A4D50;
+}

@@ -165,20 +165,42 @@ QToolBar QToolButton:checked {
     background-color: #E8F5E9; /* Light Green */
 }
 
-/* Specific to TodayTaskWidget (Light) - MODIFIED */
+/* Specific to TodayTaskWidget (Light) */
 #todayTaskFrame {
     border-radius: 4px;
     background-color: #FFFFFF; /* White background */
+    border: 1px solid #DDDDDD;
     padding: 2px;
 }
-/* --- NEW STYLES --- */
 #todayTaskFrame[priority="High"] {
-    background-color: #FDECEA; /* Light Red */
+    background-color: #FDECEA;
 }
 #todayTaskFrame[priority="Medium"] {
-    background-color: #FFF9C4; /* Light Yellow */
+    background-color: #FFF9C4;
 }
 #todayTaskFrame[priority="Low"] {
-    background-color: #E8F5E9; /* Light Green */
+    background-color: #E8F5E9;
 }
-/* --- END NEW STYLES --- */
+
+/* --- NEW: Table Styling --- */
+QTableWidget {
+    border: 1px solid #DDDDDD;
+    gridline-color: #DDDDDD;
+    background-color: #FFFFFF;
+    color: black;
+}
+QHeaderView::section {
+    background-color: #F0F0F0;
+    color: black;
+    padding: 5px;
+    border: 1px solid #DDDDDD;
+    font-weight: bold;
+}
+QHeaderView::section:vertical {
+    background-color: #F8F8F8;
+    border-right: 1px solid #DDDDDD;
+}
+QTableCornerButton::section {
+    background-color: #F8F8F8;
+    border: 1px solid #DDDDDD;
+}

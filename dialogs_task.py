@@ -24,7 +24,8 @@ from PySide6.QtCore import (
 from app.core.database import (
     add_task, update_task_details, connect_db, add_task_show_date,
     get_show_dates_for_task, remove_task_show_date,
-    get_sub_tasks, delete_task  # <-- NEW IMPORTS FOR SUB-TASKS
+    get_sub_tasks, delete_task,
+    get_total_focus_time_for_task # <-- NEW IMPORT
 )
 
 
@@ -68,9 +69,23 @@ class TaskDetailsDialog(QDialog):
         self.deadline_layout.addStretch()
         form_layout.addRow("Deadline:", self.deadline_layout)
 
-        added_label = QLabel(self.task_data.get('date_added', 'N/A'))
         if not self.is_new_task:
+            added_label = QLabel(self.task_data.get('date_added', 'N/A'))
             form_layout.addRow("Date Added:", added_label)
+            
+            # --- NEW: Show Focus Time (for Feature 2) ---
+            try:
+                # Get total minutes from DB
+                total_minutes = get_total_focus_time_for_task(self.task_id)
+                # Format into hours and minutes
+                hours, minutes = divmod(total_minutes, 60)
+                focus_time_str = f"{int(hours)}h {int(minutes)}m" if hours > 0 else f"{int(minutes)}m"
+                
+                focus_label = QLabel(focus_time_str)
+                form_layout.addRow("Total Focus Time:", focus_label)
+            except Exception as e:
+                print(f"Error loading focus time for task {self.task_id}: {e}")
+            # --- END NEW ---
 
         self.layout.addLayout(form_layout)
 
@@ -93,7 +108,7 @@ class TaskDetailsDialog(QDialog):
 
         self.layout.addWidget(show_on_group)
         
-        # --- NEW SUB-TASK SECTION ---
+        # --- SUB-TASK SECTION ---
         # Only show the sub-task section if we are editing an *existing* task
         if not self.is_new_task and self.task_id:
             sub_task_group = QGroupBox("Sub-tasks")
@@ -118,7 +133,7 @@ class TaskDetailsDialog(QDialog):
             self.layout.addWidget(sub_task_group)
             
             self._load_sub_tasks() # Load existing sub-tasks
-        # --- END OF NEW SUB-TASK SECTION ---
+        # --- END OF SUB-TASK SECTION ---
 
         self.notes_editor = QPlainTextEdit(self.task_data.get('notes', ''))
         self.notes_editor.setPlaceholderText("Enter notes for this task...")
@@ -204,7 +219,7 @@ class TaskDetailsDialog(QDialog):
             dialog.exec()
             self.task_saved.emit()
 
-    # --- NEW METHODS FOR SUB-TASKS ---
+    # --- METHODS FOR SUB-TASKS ---
 
     def _load_sub_tasks(self):
         """ Clears and re-loads the sub-task list widget. """
