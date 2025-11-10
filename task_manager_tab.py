@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QScrollArea, QFrame, QMessageBox, QDialog,
     QCalendarWidget, QDialogButtonBox,
-    QTreeWidget, QTreeWidgetItem  # <-- NEW IMPORTS
+    QTreeWidget, QTreeWidgetItem
 )
 from PySide6.QtCore import (
     Signal, Qt, QDate
@@ -14,10 +14,12 @@ from PySide6.QtCore import (
 # --- Import from our new structure ---
 from app.core.database import (
     get_tasks, add_task, update_task_status, delete_task, get_all_tasks,
-    get_sub_tasks, get_pending_subtask_count  # <-- NEW IMPORTS
+    get_sub_tasks, get_pending_subtask_count,
+    get_categories # <-- NEW IMPORT
 )
 from app.widgets.task_widgets import TaskWidget
 from app.widgets.dialogs_task import TaskDetailsDialog
+# --- This is the file. There should be NO MORE IMPORTS after this line ---
 
 # --- Task Manager Tab Widget ---
 class TaskManagerTab(QWidget):
@@ -39,7 +41,7 @@ class TaskManagerTab(QWidget):
         self._setup_ui()
 
         # --- Load Initial Data ---
-        self._load_categories()
+        self._load_categories() # <-- Now loads *all* category boxes
         self._display_tasks()
 
     def _setup_ui(self):
@@ -62,10 +64,11 @@ class TaskManagerTab(QWidget):
         self.priority_combo.setCurrentText("Medium")
         input_layout.addWidget(self.priority_combo)
 
-        self.category_entry = QLineEdit()
-        self.category_entry.setPlaceholderText("Category")
-        self.category_entry.setFixedWidth(100)
-        input_layout.addWidget(self.category_entry)
+        # --- MODIFIED: Category QLineEdit replaced with QComboBox ---
+        self.category_combo = QComboBox()
+        self.category_combo.setFixedWidth(100)
+        input_layout.addWidget(self.category_combo)
+        # --- END MODIFIED ---
 
         add_button = QPushButton("Add Task")
         add_button.clicked.connect(self._add_task)
@@ -106,7 +109,11 @@ class TaskManagerTab(QWidget):
             return
 
         # Simple task creation from the main bar
-        category = self.category_entry.text().strip() or "General"
+        # --- MODIFIED: Read from category_combo ---
+        category = self.category_combo.currentText()
+        if not category:
+            category = "General" # Safeguard
+        # --- END MODIFIED ---
         priority = self.priority_combo.currentText()
         deadline_str = self.selected_deadline.toString("yyyy-MM-dd") if self.selected_deadline else None
         
@@ -126,13 +133,15 @@ class TaskManagerTab(QWidget):
             add_task(new_task)
             # Reset input fields
             self.task_entry.clear()
-            self.category_entry.clear()
+            # --- MODIFIED: Reset category_combo ---
+            self.category_combo.setCurrentText("General")
+            # --- END MODIFIED ---
             self.priority_combo.setCurrentText("Medium")
             self.selected_deadline = None
             self.deadline_button.setText("No Deadline")
             
             # Refresh UI
-            self._load_categories()
+            # self._load_categories() # No longer needed here, _display_tasks does it
             if self.view_mode == "completed":
                 self._toggle_view()
             else:
@@ -222,32 +231,57 @@ class TaskManagerTab(QWidget):
                  self.task_tree_widget.setItemWidget(item, 0, completed_label)
 
     def _load_categories(self):
-        current_selection = self.category_filter_combo.currentText()
-        self.category_filter_combo.blockSignals(True) 
+        """
+        MODIFIED: This function now loads categories from the DB
+        and populates *both* the filter and the 'add task' combo boxes.
+        """
+        # --- Store current selections ---
+        current_filter_selection = self.category_filter_combo.currentText()
+        current_add_selection = self.category_combo.currentText()
         
+        # --- Block Signals ---
+        self.category_filter_combo.blockSignals(True) 
+        self.category_combo.blockSignals(True)
+        
+        # --- Clear ---
         self.category_filter_combo.clear()
+        self.category_combo.clear()
+        
+        # --- Repopulate ---
         self.category_filter_combo.addItem("All Categories")
         
         try:
-            all_tasks = get_all_tasks() 
-            # Get unique, sorted categories
-            categories = sorted(list(set(t.get('category', 'General') for t in all_tasks if t.get('category'))))
-            self.category_filter_combo.addItems(categories)
+            categories = get_categories() # Get from new DB table
+            category_names = [cat['name'] for cat in categories]
             
-            # Restore previous selection if possible
-            index = self.category_filter_combo.findText(current_selection)
-            if index != -1:
-                self.category_filter_combo.setCurrentIndex(index)
+            # Add to both boxes
+            self.category_filter_combo.addItems(category_names)
+            self.category_combo.addItems(category_names)
+            
+            # --- Restore selections ---
+            index_filter = self.category_filter_combo.findText(current_filter_selection)
+            if index_filter != -1:
+                self.category_filter_combo.setCurrentIndex(index_filter)
             else:
                  self.category_filter_combo.setCurrentIndex(0) 
-                 
+            
+            index_add = self.category_combo.findText(current_add_selection)
+            if index_add != -1:
+                self.category_combo.setCurrentIndex(index_add)
+            elif self.category_combo.findText("General") != -1:
+                self.category_combo.setCurrentText("General")
+            
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error loading categories: {e}")
             if self.category_filter_combo.count() == 0:
                  self.category_filter_combo.addItem("All Categories")
+            if self.category_combo.count() == 0:
+                 self.category_combo.addItem("General")
                  
         finally:
+            # --- Unblock Signals ---
             self.category_filter_combo.blockSignals(False) 
+            self.category_combo.blockSignals(False)
 
     def _toggle_view(self):
         if self.view_mode == "pending":

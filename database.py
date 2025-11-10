@@ -30,11 +30,91 @@ def get_data_file_path(filename):
 DATABASE_FILE = get_data_file_path("task_manager.db")
 
 def connect_db():
-# ... (rest of the file is identical) ...
     """Establishes a connection to the database."""
     conn = sqlite3.connect(DATABASE_FILE, timeout=10) 
     conn.row_factory = sqlite3.Row # Allows accessing columns by name
     return conn
+
+# --- NEW: Helper function to check if a column exists ---
+def _column_exists(cursor, table_name, column_name):
+    """Checks if a column exists in a table."""
+    try:
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        columns = [row['name'] for row in cursor.fetchall()]
+        return column_name in columns
+    except sqlite3.Error as e:
+        print(f"Error checking column {table_name}.{column_name}: {e}")
+        return False
+
+# --- NEW: Helper function to check if a table exists ---
+def _table_exists(cursor, table_name):
+    """Checks if a table exists in the database."""
+    try:
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table_name,))
+        return cursor.fetchone() is not None
+    except sqlite3.Error as e:
+        print(f"Error checking table {table_name}: {e}")
+        return False
+
+# --- NEW: Migration function to update existing database schema ---
+def run_migrations(conn):
+    """
+    Applies non-destructive schema changes (like ADD COLUMN)
+    to an existing database.
+    """
+    cursor = conn.cursor()
+    
+    print("Checking for database migrations...")
+    
+    # --- Migration 1: Add parent_task_id to tasks ---
+    try:
+        if not _column_exists(cursor, 'tasks', 'parent_task_id'):
+            print("Running migration 1: Adding 'parent_task_id' to 'tasks'...")
+            cursor.execute("ALTER TABLE tasks ADD COLUMN parent_task_id TEXT")
+            conn.commit()
+    except Exception as e:
+        print(f"Error during migration 1 (tasks.parent_task_id): {e}")
+
+    # --- Migration 2: Add session_type to focus_log ---
+    try:
+        if _table_exists(cursor, 'focus_log'): # Check if table exists first
+            if not _column_exists(cursor, 'focus_log', 'session_type'):
+                print("Running migration 2: Adding 'session_type' to 'focus_log'...")
+                # Add NOT NULL DEFAULT 'work' so old entries are valid
+                cursor.execute("ALTER TABLE focus_log ADD COLUMN session_type TEXT NOT NULL DEFAULT 'work'") 
+                conn.commit()
+    except Exception as e:
+        print(f"Error during migration 2 (focus_log.session_type): {e}")
+
+    # --- Migration 3: Add task_categories table ---
+    try:
+        if not _table_exists(cursor, 'task_categories'):
+            print("Running migration 3: Creating 'task_categories' table...")
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS task_categories (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL UNIQUE,
+                sort_order INTEGER
+            )""")
+            # Add a default category
+            cursor.execute("INSERT OR IGNORE INTO task_categories (id, name, sort_order) VALUES (?, ?, ?)",
+                           (str(uuid.uuid4()), 'General', 0))
+            conn.commit()
+    except Exception as e:
+        print(f"Error during migration 3 (task_categories): {e}")
+
+    # --- NEW: Migration 4: Add trigger_day_of_week to automations ---
+    try:
+        if _table_exists(cursor, 'automations'):
+            if not _column_exists(cursor, 'automations', 'trigger_day_of_week'):
+                print("Running migration 4: Adding 'trigger_day_of_week' to 'automations'...")
+                # Use INTEGER to store day of week (0=Mon, 6=Sun, -1=Any)
+                cursor.execute("ALTER TABLE automations ADD COLUMN trigger_day_of_week INTEGER DEFAULT -1") 
+                conn.commit()
+    except Exception as e:
+        print(f"Error during migration 4 (automations.trigger_day_of_week): {e}")
+    # --- END NEW ---
+
 
 def create_tables():
     """Creates the necessary tables if they don't already exist."""
@@ -93,7 +173,8 @@ def create_tables():
     CREATE TABLE IF NOT EXISTS automations (
         id TEXT PRIMARY KEY,
         trigger_title TEXT NOT NULL UNIQUE,
-        rule_name TEXT
+        rule_name TEXT,
+        trigger_day_of_week INTEGER DEFAULT -1 
     )""")
 
     # --- Automation Actions Table (The Actions) ---
@@ -147,7 +228,22 @@ def create_tables():
         notes TEXT,
         FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
     )""")
-
+    
+    # --- NEW: Task Categories Table (for Feature 4) ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS task_categories (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        sort_order INTEGER
+    )""")
+    # Add a default category if it's not there
+    cursor.execute("INSERT OR IGNORE INTO task_categories (id, name, sort_order) VALUES (?, ?, ?)",
+                   (str(uuid.uuid4()), 'General', 0))
+    # --- END NEW ---
+    
+    # --- MODIFIED: Run migrations *after* creating tables ---
+    run_migrations(conn)
+    # --- END MODIFIED ---
     
     conn.commit()
     conn.close()
@@ -589,9 +685,9 @@ def delete_calendar_event(event_id):
     conn.commit()
     conn.close()
 
-# ========== Automation Functions ==========
+# ========== Automation Functions (MODIFIED) ==========
 
-def save_automation_rule(automation_id, rule_name, trigger_title, actions_list):
+def save_automation_rule(automation_id, rule_name, trigger_title, actions_list, trigger_day_of_week):
     """ Saves (inserts or updates) a rule and its actions in a transaction. """
     conn = connect_db()
     conn.execute("PRAGMA foreign_keys = ON")
@@ -599,11 +695,13 @@ def save_automation_rule(automation_id, rule_name, trigger_title, actions_list):
     try:
         if automation_id is None:
             automation_id = str(uuid.uuid4())
-            cursor.execute("INSERT INTO automations (id, rule_name, trigger_title) VALUES (?, ?, ?)",
-                           (automation_id, rule_name, trigger_title))
+            # --- MODIFIED: Include new day of week column ---
+            cursor.execute("INSERT INTO automations (id, rule_name, trigger_title, trigger_day_of_week) VALUES (?, ?, ?, ?)",
+                           (automation_id, rule_name, trigger_title, trigger_day_of_week))
         else:
-            cursor.execute("UPDATE automations SET rule_name = ?, trigger_title = ? WHERE id = ?",
-                           (rule_name, trigger_title, automation_id))
+            # --- MODIFIED: Include new day of week column ---
+            cursor.execute("UPDATE automations SET rule_name = ?, trigger_title = ?, trigger_day_of_week = ? WHERE id = ?",
+                           (rule_name, trigger_title, trigger_day_of_week, automation_id))
             cursor.execute("DELETE FROM automation_actions WHERE automation_id = ?", (automation_id,))
         
         for action in actions_list:
@@ -753,7 +851,7 @@ def delete_kb_topic(topic_id):
     conn.commit()
     conn.close()
 
-# --- NEW: Functions for KB Search ---
+# --- Functions for KB Search ---
 def get_all_kb_topics_map():
     """
     Fetches all KB topics and returns them as a dictionary
@@ -967,3 +1065,62 @@ def get_focus_time_summary_for_range(start_date, end_date):
             
     conn.close()
     return summary
+
+# --- NEW: Task Category Functions ---
+def get_categories():
+    """Gets all defined task categories, sorted."""
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM task_categories ORDER BY sort_order, name")
+    categories = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return categories
+
+def add_category(name, sort_order=None):
+    """Adds a new category. Returns the new ID."""
+    conn = connect_db()
+    cursor = conn.cursor()
+    new_id = str(uuid.uuid4())
+    if sort_order is None:
+        # Get max sort_order and add 1
+        cursor.execute("SELECT MAX(sort_order) FROM task_categories")
+        max_sort = cursor.fetchone()[0]
+        sort_order = (max_sort or 0) + 1
+        
+    try:
+        cursor.execute("INSERT INTO task_categories (id, name, sort_order) VALUES (?, ?, ?)",
+                       (new_id, name, sort_order))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        print(f"Category '{name}' already exists.")
+        conn.close()
+        return None
+    finally:
+        conn.close()
+    return new_id
+
+def delete_category(category_id):
+    """Deletes a category. (Tasks are just un-categorized, not deleted)"""
+    conn = connect_db()
+    cursor = conn.cursor()
+    try:
+        # First, un-set this category from all tasks
+        cursor.execute("UPDATE tasks SET category = 'General' WHERE category = (SELECT name FROM task_categories WHERE id = ?)", (category_id,))
+        # Then, delete the category
+        cursor.execute("DELETE FROM task_categories WHERE id = ?", (category_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"Error deleting category: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def category_exists(name):
+    """Checks if a category name already exists (case-insensitive)."""
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM task_categories WHERE name = ? COLLATE NOCASE", (name,))
+    row = cursor.fetchone()
+    conn.close()
+    return row is not None
+# --- END NEW ---

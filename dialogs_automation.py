@@ -243,6 +243,17 @@ class AutomationRuleDialog(QDialog):
         self.trigger_title_entry = QLineEdit()
         self.trigger_title_entry.setPlaceholderText("e.g., 'Late Shift' (must match calendar event title)")
         form_layout.addRow("Trigger Event Title:", self.trigger_title_entry)
+        
+        # --- NEW: Day of Week Selector ---
+        self.day_of_week_combo = QComboBox()
+        self.day_of_week_combo.addItems([
+            "Any Day", "Monday", "Tuesday", "Wednesday", 
+            "Thursday", "Friday", "Saturday", "Sunday"
+        ])
+        # DB stores -1 for Any, 0 for Mon, 6 for Sun. Combo index is 0-7.
+        form_layout.addRow("Trigger Day:", self.day_of_week_combo)
+        # --- END NEW ---
+        
         self.layout.addLayout(form_layout)
 
         # --- Actions List ---
@@ -290,6 +301,13 @@ class AutomationRuleDialog(QDialog):
         """ Pre-fills the dialog fields with data from an existing rule. """
         self.rule_name_entry.setText(rule_data.get('rule_name', ''))
         self.trigger_title_entry.setText(rule_data.get('trigger_title', ''))
+        
+        # --- NEW: Load day of week ---
+        # DB stores -1 to 6. Combo is 0-7.
+        db_day_index = rule_data.get('trigger_day_of_week', -1) # Default to -1 (Any)
+        combo_index = db_day_index + 1 # Convert -1 to 0, 0 to 1, etc.
+        self.day_of_week_combo.setCurrentIndex(combo_index)
+        # --- END NEW ---
 
         # Load actions into our internal list and the list widget
         self.actions_list = rule_data.get('actions', [])
@@ -386,6 +404,12 @@ class AutomationRuleDialog(QDialog):
         """ Saves the new rule and its list of actions to the database. """
         rule_name = self.rule_name_entry.text().strip()
         trigger_title = self.trigger_title_entry.text().strip()
+        
+        # --- NEW: Get Day of Week ---
+        # Combo index is 0-7. DB is -1 to 6.
+        combo_index = self.day_of_week_combo.currentIndex()
+        db_day_index = combo_index - 1 # Convert 0 to -1, 1 to 0, etc.
+        # --- END NEW ---
 
         if not (rule_name and trigger_title):
             QMessageBox.warning(self, "Input Error", "Rule Name and Trigger Title cannot be empty.")
@@ -396,7 +420,9 @@ class AutomationRuleDialog(QDialog):
             return
 
         try:
-            save_automation_rule(self.automation_id, rule_name, trigger_title, self.actions_list)
+            # --- MODIFIED: Pass new day of week parameter ---
+            save_automation_rule(self.automation_id, rule_name, trigger_title, self.actions_list, db_day_index)
+            # --- END MODIFIED ---
             self.accept()
 
         except sqlite3.IntegrityError:

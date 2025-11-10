@@ -58,9 +58,8 @@ from app import APP_VERSION
 # --- Main Window Class ---
 class MainWindow(QMainWindow):
     
-    # --- NEW: Constant for schedule check ---
-    # We'll notify at 15, 5, and 0 minutes (at start time)
-    SCHEDULE_NOTIFY_WINDOWS = [15, 5, 0]
+    # --- Constant for schedule check ---
+    SCHEDULE_NOTIFY_WINDOWS = [15, 5, 0] # Notify at 15, 5, and 0 minutes
 
     def __init__(self, app):
         super().__init__()
@@ -86,9 +85,9 @@ class MainWindow(QMainWindow):
         self.selected_deadline = None 
         self.view_mode = "pending" 
         self.current_tab_index = 0
-        self.current_app_date = QDate.currentDate()
-        # --- MODIFIED: Use a dict to track *which* notifications were sent ---
-        self.notified_event_windows = {} # e.g., {'event_id': {15, 5}}
+        self.current_app_date = QDate.currentDate() 
+        # --- MODIFIED: Use a dict to track notifications ---
+        self.notified_event_windows = {} # e.g., {'event_id_123': [15, 5]}
         
         # --- Central Widget and Layout ---
         central_widget = QWidget()
@@ -159,12 +158,11 @@ class MainWindow(QMainWindow):
         self.datetime_timer.start(1000) 
         self._update_date_time_label()
         
-        # --- NEW: Master Clock for Schedule Notifications ---
+        # --- Master Clock for Schedule Notifications ---
         self.schedule_notification_timer = QTimer(self)
         self.schedule_notification_timer.timeout.connect(self._check_schedule_notifications)
         self.schedule_notification_timer.start(60000) # Check every 60 seconds
         QTimer.singleShot(1000, self._check_schedule_notifications) # Check once on startup
-        # --- END NEW ---
         
         # --- Run Automations ---
         # Run *after* all UI is loaded, on a single-shot timer
@@ -307,14 +305,13 @@ class MainWindow(QMainWindow):
         now = datetime.now()
         self.date_time_label.setText(now.strftime("%A, %b %d, %Y | %I:%M:%S %p"))
         
-        # --- NEW: Check if the day has rolled over ---
+        # --- Check if the day has rolled over ---
         today = QDate.currentDate()
         if today != self.current_app_date:
             print(f"New day detected. Resetting notification log for {today.toString()}.")
             self.current_app_date = today
-            # --- MODIFIED: Clear the new tracking dict ---
-            self.notified_event_windows.clear()
-        # --- END NEW ---
+            # --- MODIFIED: Reset notification dict ---
+            self.notified_event_windows.clear() 
         
     def _on_tab_changed(self, index):
         """ Handle actions when the selected tab changes. """
@@ -361,7 +358,7 @@ class MainWindow(QMainWindow):
         print("[Refresh] Task data changed. Refreshing tabs...")
         if hasattr(self, 'task_manager_tab'):
             self.task_manager_tab._display_tasks()
-            self.task_manager_tab._load_categories()
+            # self.task_manager_tab._load_categories() # <-- This is now done by _on_categories_updated
         
         if hasattr(self, 'today_tab'):
             self.today_tab._refresh_today_dashboard()
@@ -382,12 +379,27 @@ class MainWindow(QMainWindow):
             if self.tab_widget.currentWidget() == self.daily_notes_tab:
                 self.daily_notes_tab._load_current_note()
 
+    # --- NEW: Slot to refresh categories ---
+    @Slot()
+    def _on_categories_updated(self):
+        """
+        Slot to refresh all category drop-down menus.
+        """
+        print("[Refresh] Categories updated. Refreshing category lists...")
+        if hasattr(self, 'task_manager_tab'):
+            self.task_manager_tab._load_categories()
+        # We also need to refresh the task details dialog IF it's open,
+        # but it's simpler to just let it load fresh when it opens next.
+    # --- END NEW ---
+
     # --- Settings Dialog Functions ---
     def _open_settings_dialog(self):
         dialog = SettingsDialog(self)
         dialog.theme_changed.connect(self.load_theme)
         dialog.pomodoro_settings_changed.connect(self.persistent_timer_frame.reload_settings_and_reset_timer)
         dialog.personalization_changed.connect(self._update_window_title)
+        # --- NEW: Connect category signal ---
+        dialog.categories_updated.connect(self._on_categories_updated)
         dialog.exec()
         
     def _export_tasks(self):
@@ -405,7 +417,7 @@ class MainWindow(QMainWindow):
             # Ensure all potential headers are included
             headers = ['id', 'description', 'status', 'priority', 'category', 'deadline', 
                        'date_added', 'date_completed', 'notes', 'schedule_event_id',
-                       'created_by_automation_id', 'show_mode', 'parent_task_id'] # <-- Added new header
+                       'created_by_automation_id', 'show_mode', 'parent_task_id']
 
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=headers, extrasaction='ignore')
@@ -473,6 +485,7 @@ class MainWindow(QMainWindow):
     def _check_schedule_notifications(self):
         """
         Called by a QTimer every minute to check for upcoming schedule events.
+        Now supports multi-stage notifications.
         """
         try:
             today_str = self.current_app_date.toString("yyyy-MM-dd")
@@ -492,54 +505,42 @@ class MainWindow(QMainWindow):
                     print(f"Invalid time format in schedule: {start_time_str}")
                     continue
                 
-                # Get the set of notifications already sent for this event
-                sent_windows = self.notified_event_windows.setdefault(event_id, set())
-                
                 # Calculate time difference in minutes
                 time_diff_seconds = (datetime.combine(date.today(), event_time) - 
                                      datetime.combine(date.today(), current_time)).total_seconds()
-                minutes_until_event = time_diff_seconds / 60
+                minutes_until_event = round(time_diff_seconds / 60)
                 
-                # --- NEW: Loop through all notification windows ---
-                for window_minutes in self.SCHEDULE_NOTIFY_WINDOWS:
-                    
-                    # Check if this window is in range AND has not been sent
-                    
-                    # Special case for "0 minutes" (at start time)
-                    # We give it a 1-minute grace period *after* start time
-                    # in case the timer ticks at 08:00:01 for an 08:00:00 event.
-                    is_in_window = False
-                    if window_minutes == 0:
-                        if -1 < minutes_until_event <= 0:
-                            is_in_window = True
-                    else:
-                        if window_minutes - 1 < minutes_until_event <= window_minutes:
-                            is_in_window = True
-
-                    if is_in_window and window_minutes not in sent_windows:
+                # Get the list of notifications already sent for this event
+                sent_windows = self.notified_event_windows.get(event_id, [])
+                
+                for notify_window in self.SCHEDULE_NOTIFY_WINDOWS:
+                    if (minutes_until_event == notify_window) and (notify_window not in sent_windows):
                         
-                        # --- Create notification message ---
+                        # Prepare message
                         title = ""
                         message = ""
-                        if window_minutes == 0:
+                        if notify_window == 0:
                             title = "Event Starting Now"
                             message = f"{event['title']} is starting now at {start_time_str}."
                         else:
-                            title = f"Event Starting in {window_minutes} Minutes"
+                            title = f"Event Starting in {notify_window} Mins"
                             message = f"{event['title']} is starting at {start_time_str}."
+
+                        print(f"Notifying for event: {event['title']} ({notify_window} mins)")
                         
-                        print(f"[Notification] Sending: {title}")
                         self._show_notification(title, message)
                         QApplication.beep() 
                         
-                        # Add to set to prevent re-notifying for this window
-                        sent_windows.add(window_minutes)
+                        # Add this window to the list of sent notifications
+                        sent_windows.append(notify_window)
+                        self.notified_event_windows[event_id] = sent_windows
+                        break # Only send one notification per check
 
         except Exception as e:
             print(f"Error checking schedule notifications: {e}")
     # --- END MODIFIED ---
 
-    # --- Reusable automation runner (added for bugfix) ---
+    # --- Reusable automation runner (MODIFIED) ---
     def run_automations_for_event(self, event_title, event_date_str):
         """
         Checks a specific event title and date against all automation rules
@@ -556,53 +557,88 @@ class MainWindow(QMainWindow):
             if not all_rules:
                 return False # No rules to run
 
-            rules_map = {rule['trigger_title'].lower(): rule for rule in all_rules}
+            # --- MODIFIED: Build rules_map based on title AND day ---
+            # We can't just map by title anymore, we need to check both.
             event_title_lower = event_title.lower()
+            
+            # Get the day of the week for the event
+            try:
+                event_date = datetime.strptime(event_date_str, "%Y-%m-%d")
+                actual_day_of_week = event_date.weekday() # Monday is 0, Sunday is 6
+            except Exception as e:
+                print(f"Error parsing event date {event_date_str}: {e}")
+                return False # Fail safe
+            
+            # Find all rules that match the title
+            matching_rules = [
+                rule for rule in all_rules 
+                if rule['trigger_title'].lower() == event_title_lower
+            ]
+            
+            if not matching_rules:
+                print(f"[Automation] No rules found with trigger title: '{event_title_lower}'")
+                return False
 
-            if event_title_lower in rules_map:
-                rule = rules_map[event_title_lower]
-                automation_id = rule['id']
-                print(f"[Automation] MATCH FOUND: Rule '{rule['rule_name']}'")
+            # Now, from the title-matches, find the one that matches the day
+            rule_to_run = None
+            for rule in matching_rules:
+                required_day_of_week = rule.get('trigger_day_of_week', -1) # -1 is "Any"
+                
+                if required_day_of_week == -1: # "Any Day" rule
+                    rule_to_run = rule
+                    break # This rule matches, use it
+                elif required_day_of_week == actual_day_of_week:
+                    rule_to_run = rule
+                    break # This rule matches, use it
+            
+            if not rule_to_run:
+                print(f"[Automation] Match found for '{event_title}', but day of week does not match. "
+                      f"(Actual Day: {actual_day_of_week}). Skipping.")
+                return False # No rule matched both title and day
+            # --- END MODIFIED ---
+                
+            automation_id = rule_to_run['id']
+            print(f"[Automation] MATCH FOUND: Rule '{rule_to_run['rule_name']}' for Day: {actual_day_of_week}")
 
-                actions = get_actions_for_automation(automation_id)
-                if not actions:
-                    print(f"[Automation] Rule found, but it has no actions.")
-                    return False
+            actions = get_actions_for_automation(automation_id)
+            if not actions:
+                print(f"[Automation] Rule found, but it has no actions.")
+                return False
 
-                created_task_ids = []
-                created_event_ids = []
+            created_task_ids = []
+            created_event_ids = []
 
-                # Run task actions
-                task_actions = [a for a in actions if a['action_type'] == 'ensure_task_link']
-                for action in task_actions:
-                    task_id = self._execute_automation_action(action, event_date_str, automation_id)
-                    if task_id:
-                        created_task_ids.append(task_id)
-                        actions_run = True
+            # Run task actions
+            task_actions = [a for a in actions if a['action_type'] == 'ensure_task_link']
+            for action in task_actions:
+                task_id = self._execute_automation_action(action, event_date_str, automation_id)
+                if task_id:
+                    created_task_ids.append(task_id)
+                    actions_run = True
 
-                # Run schedule actions
-                schedule_actions = [a for a in actions if a['action_type'] == 'create_schedule_block']
-                for action in schedule_actions:
-                    event_id = self._execute_automation_action(action, event_date_str, automation_id)
-                    if event_id:
-                        created_event_ids.append(event_id)
-                        actions_run = True
+            # Run schedule actions
+            schedule_actions = [a for a in actions if a['action_type'] == 'create_schedule_block']
+            for action in schedule_actions:
+                event_id = self._execute_automation_action(action, event_date_str, automation_id)
+                if event_id:
+                    created_event_ids.append(event_id)
+                    actions_run = True
 
-                # Link tasks to events
-                if created_task_ids and created_event_ids:
-                    print(f"[Automation] Linking {len(created_task_ids)} task(s) to {len(created_event_ids)} event(s).")
-                    for task_id in created_task_ids:
-                        for event_id in created_event_ids:
-                            try:
-                                link_task_to_event(task_id, event_id)
-                                print(f"[Automation]   > Linked task {task_id} to event {event_id}")
-                            except Exception as e:
-                                print(f"[Automation]   > FAILED to link task {task_id} to event {event_id}: {e}")
+            # Link tasks to events
+            if created_task_ids and created_event_ids:
+                print(f"[Automation] Linking {len(created_task_ids)} task(s) to {len(created_event_ids)} event(s).")
+                for task_id in created_task_ids:
+                    for event_id in created_event_ids:
+                        try:
+                            link_task_to_event(task_id, event_id)
+                            print(f"[Automation]   > Linked task {task_id} to event {event_id}")
+                        except Exception as e:
+                            print(f"[Automation]   > FAILED to link task {task_id} to event {event_id}: {e}")
 
-                if actions_run:
-                    print(f"[Automation] Actions completed for '{event_title}'. Refreshing UI.")
-                    # Trigger a refresh of all tabs that need it
-                    self._on_task_data_changed() 
+            if actions_run:
+                print(f"[Automation] Actions completed for '{event_title}'. Refreshing UI.")
+                # Trigger a refresh of all tabs that need it
+                self._on_task_data_changed() 
 
         except Exception as e:
             QMessageBox.critical(self, "Automation Error", f"Error during on-demand automation: {e}")
@@ -611,7 +647,7 @@ class MainWindow(QMainWindow):
 
     def _run_startup_automations(self):
         """ Checks today's events and runs any matching automations. """
-        today_str = datetime.now().strftime("%Y-m-%d")
+        today_str = datetime.now().strftime("%Y-%m-%d")
         
         last_run = get_app_state('last_automation_run_date')
         if last_run == today_str:
