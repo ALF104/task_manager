@@ -103,17 +103,17 @@ def run_migrations(conn):
     except Exception as e:
         print(f"Error during migration 3 (task_categories): {e}")
 
-    # --- NEW: Migration 4: Add trigger_day_of_week to automations ---
+    # --- MODIFIED: Migration 4: Add trigger_day_of_week to automations ---
     try:
         if _table_exists(cursor, 'automations'):
             if not _column_exists(cursor, 'automations', 'trigger_day_of_week'):
                 print("Running migration 4: Adding 'trigger_day_of_week' to 'automations'...")
-                # Use INTEGER to store day of week (0=Mon, 6=Sun, -1=Any)
-                cursor.execute("ALTER TABLE automations ADD COLUMN trigger_day_of_week INTEGER DEFAULT -1") 
+                # Use INTEGER to store bitmask. Default to 127 (All Days)
+                cursor.execute("ALTER TABLE automations ADD COLUMN trigger_day_of_week INTEGER DEFAULT 127") 
                 conn.commit()
     except Exception as e:
         print(f"Error during migration 4 (automations.trigger_day_of_week): {e}")
-    # --- END NEW ---
+    # --- END MODIFIED ---
 
 
 def create_tables():
@@ -174,7 +174,7 @@ def create_tables():
         id TEXT PRIMARY KEY,
         trigger_title TEXT NOT NULL UNIQUE,
         rule_name TEXT,
-        trigger_day_of_week INTEGER DEFAULT -1 
+        trigger_day_of_week INTEGER DEFAULT 127 
     )""")
 
     # --- Automation Actions Table (The Actions) ---
@@ -585,7 +585,7 @@ def get_schedule_events_for_date(date):
     return events
 
 def get_schedule_event_by_id(event_id):
-    conn = connect_db()
+    conn = connect_db() # Was connect_cvs
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM schedule_events WHERE id = ?", (event_id,))
     row = cursor.fetchone()

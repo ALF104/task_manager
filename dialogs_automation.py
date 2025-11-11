@@ -10,7 +10,8 @@ from PySide6.QtWidgets import (
     QTimeEdit, QDialogButtonBox, QFormLayout, QListWidget, QListWidgetItem,
     QGraphicsView, QGraphicsScene, QTextBrowser,
     QGraphicsRectItem, QGraphicsTextItem, QGraphicsItem, QGroupBox, QToolBar,
-    QTextEdit, QInputDialog, QSpinBox
+    QTextEdit, QInputDialog, QSpinBox,
+    QMenu # <-- NEW IMPORT
 )
 from PySide6.QtGui import (
     QFont, QColor, QPen, QBrush, QAction, QTextCharFormat,
@@ -223,14 +224,21 @@ class ScheduleActionDialog(QDialog):
 
 # --- Automation Rule Creation Dialog (Overhauled) ---
 class AutomationRuleDialog(QDialog):
+    # Day mapping: Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64
+    DAY_FLAGS = [1, 2, 4, 8, 16, 32, 64]
+    DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
     def __init__(self, parent=None, rule_data=None):
         super().__init__(parent)
         self.automation_id = rule_data.get('id') if rule_data else None
         self.setWindowTitle("Edit Automation Rule" if rule_data else "Create Automation Rule")
-        self.setMinimumSize(500, 400)
+        self.setMinimumSize(500, 450) # Made slightly taller
 
         # This list will hold our action dictionaries
         self.actions_list = []
+        # --- MODIFIED: Store the current day bitmask, default to 0 ---
+        self.current_day_mask = 0 # Default to "None Selected"
+        self.day_actions = []
 
         self.layout = QVBoxLayout(self)
 
@@ -244,14 +252,11 @@ class AutomationRuleDialog(QDialog):
         self.trigger_title_entry.setPlaceholderText("e.g., 'Late Shift' (must match calendar event title)")
         form_layout.addRow("Trigger Event Title:", self.trigger_title_entry)
         
-        # --- NEW: Day of Week Selector ---
-        self.day_of_week_combo = QComboBox()
-        self.day_of_week_combo.addItems([
-            "Any Day", "Monday", "Tuesday", "Wednesday", 
-            "Thursday", "Friday", "Saturday", "Sunday"
-        ])
-        # DB stores -1 for Any, 0 for Mon, 6 for Sun. Combo index is 0-7.
-        form_layout.addRow("Trigger Day:", self.day_of_week_combo)
+        # --- NEW: Day of Week Button Menu ---
+        self.day_select_button = QPushButton("Days: None Selected") # <-- MODIFIED
+        self.day_select_button.clicked.connect(self._open_day_menu)
+        form_layout.addRow("Trigger Days:", self.day_select_button)
+        self._build_day_menu()
         # --- END NEW ---
         
         self.layout.addLayout(form_layout)
@@ -296,22 +301,103 @@ class AutomationRuleDialog(QDialog):
 
         if rule_data:
             self._load_rule(rule_data)
+        else:
+            # Default to "None Selected"
+            self._update_day_selection(0) # <-- MODIFIED
 
     def _load_rule(self, rule_data):
         """ Pre-fills the dialog fields with data from an existing rule. """
         self.rule_name_entry.setText(rule_data.get('rule_name', ''))
         self.trigger_title_entry.setText(rule_data.get('trigger_title', ''))
         
-        # --- NEW: Load day of week ---
-        # DB stores -1 to 6. Combo is 0-7.
-        db_day_index = rule_data.get('trigger_day_of_week', -1) # Default to -1 (Any)
-        combo_index = db_day_index + 1 # Convert -1 to 0, 0 to 1, etc.
-        self.day_of_week_combo.setCurrentIndex(combo_index)
+        # --- NEW: Load day of week bitmask ---
+        db_day_mask = rule_data.get('trigger_day_of_week', 0) # Default to 0 (None)
+        self._update_day_selection(db_day_mask)
         # --- END NEW ---
 
         # Load actions into our internal list and the list widget
         self.actions_list = rule_data.get('actions', [])
         self._refresh_actions_list_widget()
+
+    # --- NEW: Day Button/Menu Logic ---
+    def _build_day_menu(self):
+        """Creates the checkable QMenu for day selection."""
+        self.day_menu = QMenu(self)
+        self.day_actions = [] # Clear any old actions
+        
+        # 1. Add "Any Day" action
+        self.action_any_day = QAction("Any Day", self)
+        self.action_any_day.setCheckable(True)
+        self.action_any_day.triggered.connect(self._on_any_day_toggled)
+        self.day_menu.addAction(self.action_any_day)
+        
+        self.day_menu.addSeparator()
+        
+        # 2. Add 7 day actions
+        for i, name in enumerate(self.DAY_NAMES):
+            action = QAction(name, self)
+            action.setCheckable(True)
+            action.setData(self.DAY_FLAGS[i]) # Store bitmask value (1, 2, 4...)
+            action.triggered.connect(self._on_day_toggled)
+            self.day_actions.append(action)
+            self.day_menu.addAction(action)
+
+    def _open_day_menu(self):
+        """Shows the QMenu under the button."""
+        self.day_menu.exec(self.day_select_button.mapToGlobal(
+            self.day_select_button.rect().bottomLeft()
+        ))
+
+    def _on_any_day_toggled(self, checked):
+        """When 'Any Day' is clicked, update all other checks."""
+        mask = 127 if checked else 0
+        self._update_day_selection(mask)
+
+    def _on_day_toggled(self, checked):
+        """When an individual day is clicked, recalculate the bitmask."""
+        mask = 0
+        for action in self.day_actions:
+            if action.isChecked():
+                mask |= action.data() # Add this day's flag
+        self._update_day_selection(mask)
+
+    def _update_day_selection(self, mask):
+        """Updates the check states and button text based on a bitmask."""
+        self.current_day_mask = mask
+        
+        # Block signals to prevent loops
+        self.action_any_day.blockSignals(True)
+        for action in self.day_actions:
+            action.blockSignals(True)
+            
+        # Update individual day checks
+        for i, action in enumerate(self.day_actions):
+            if (mask & self.DAY_FLAGS[i]):
+                action.setChecked(True)
+            else:
+                action.setChecked(False)
+        
+        # Update "Any Day" check
+        is_all_days = (mask == 127)
+        self.action_any_day.setChecked(is_all_days)
+        
+        # Update button text
+        if is_all_days:
+            self.day_select_button.setText("Days: Any Day")
+        elif mask == 0:
+            self.day_select_button.setText("Days: None Selected")
+        else:
+            selected_names = [
+                self.DAY_NAMES[i] for i, action in enumerate(self.day_actions) 
+                if action.isChecked()
+            ]
+            self.day_select_button.setText(f"Days: {', '.join(selected_names)}")
+
+        # Unblock signals
+        self.action_any_day.blockSignals(False)
+        for action in self.day_actions:
+            action.blockSignals(False)
+    # --- END NEW ---
 
     def _refresh_actions_list_widget(self):
         """Clears and repopulates the QListWidget from self.actions_list."""
@@ -326,8 +412,6 @@ class AutomationRuleDialog(QDialog):
 
             item = QListWidgetItem(desc, self.actions_list_widget)
             item.setData(Qt.ItemDataRole.UserRole, i) # Store the index
-
-    # --- START OF MISSING METHODS ---
 
     def _add_task_action(self):
         """Opens the TaskActionDialog to create a new task action."""
@@ -405,10 +489,13 @@ class AutomationRuleDialog(QDialog):
         rule_name = self.rule_name_entry.text().strip()
         trigger_title = self.trigger_title_entry.text().strip()
         
-        # --- NEW: Get Day of Week ---
-        # Combo index is 0-7. DB is -1 to 6.
-        combo_index = self.day_of_week_combo.currentIndex()
-        db_day_index = combo_index - 1 # Convert 0 to -1, 1 to 0, etc.
+        # --- NEW: Get Day of Week Bitmask ---
+        # The mask is updated in real-time, so we just grab it.
+        db_day_mask = self.current_day_mask
+        
+        if db_day_mask == 0:
+             QMessageBox.warning(self, "Input Error", "You must select at least one trigger day.")
+             return
         # --- END NEW ---
 
         if not (rule_name and trigger_title):
@@ -420,8 +507,8 @@ class AutomationRuleDialog(QDialog):
             return
 
         try:
-            # --- MODIFIED: Pass new day of week parameter ---
-            save_automation_rule(self.automation_id, rule_name, trigger_title, self.actions_list, db_day_index)
+            # --- MODIFIED: Pass new day of week bitmask ---
+            save_automation_rule(self.automation_id, rule_name, trigger_title, self.actions_list, db_day_mask)
             # --- END MODIFIED ---
             self.accept()
 
@@ -431,5 +518,3 @@ class AutomationRuleDialog(QDialog):
              QMessageBox.warning(self, "Input Error", str(ve))
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Could not save automation rule: {e}")
-            
-    # --- END OF MISSING METHODS ---

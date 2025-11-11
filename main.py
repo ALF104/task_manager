@@ -60,6 +60,9 @@ class MainWindow(QMainWindow):
     
     # --- Constant for schedule check ---
     SCHEDULE_NOTIFY_WINDOWS = [15, 5, 0] # Notify at 15, 5, and 0 minutes
+    # --- NEW: Day of Week Bitmask flags ---
+    # Mon=1, Tue=2, Wed=4, Thu=8, Fri=16, Sat=32, Sun=64
+    DAY_FLAGS = [1, 2, 4, 8, 16, 32, 64]
 
     def __init__(self, app):
         super().__init__()
@@ -564,7 +567,8 @@ class MainWindow(QMainWindow):
             # Get the day of the week for the event
             try:
                 event_date = datetime.strptime(event_date_str, "%Y-%m-%d")
-                actual_day_of_week = event_date.weekday() # Monday is 0, Sunday is 6
+                actual_day_of_week_index = event_date.weekday() # Monday is 0, Sunday is 6
+                actual_day_flag = self.DAY_FLAGS[actual_day_of_week_index] # Get bitmask value
             except Exception as e:
                 print(f"Error parsing event date {event_date_str}: {e}")
                 return False # Fail safe
@@ -582,23 +586,21 @@ class MainWindow(QMainWindow):
             # Now, from the title-matches, find the one that matches the day
             rule_to_run = None
             for rule in matching_rules:
-                required_day_of_week = rule.get('trigger_day_of_week', -1) # -1 is "Any"
+                required_day_mask = rule.get('trigger_day_of_week', 127) # 127 is "Any"
                 
-                if required_day_of_week == -1: # "Any Day" rule
-                    rule_to_run = rule
-                    break # This rule matches, use it
-                elif required_day_of_week == actual_day_of_week:
+                # Use bitwise AND to check if the day is in the mask
+                if (required_day_mask & actual_day_flag):
                     rule_to_run = rule
                     break # This rule matches, use it
             
             if not rule_to_run:
                 print(f"[Automation] Match found for '{event_title}', but day of week does not match. "
-                      f"(Actual Day: {actual_day_of_week}). Skipping.")
+                      f"(Actual Day Flag: {actual_day_flag}). Skipping.")
                 return False # No rule matched both title and day
             # --- END MODIFIED ---
                 
             automation_id = rule_to_run['id']
-            print(f"[Automation] MATCH FOUND: Rule '{rule_to_run['rule_name']}' for Day: {actual_day_of_week}")
+            print(f"[Automation] MATCH FOUND: Rule '{rule_to_run['rule_name']}' for Day Flag: {actual_day_flag}")
 
             actions = get_actions_for_automation(automation_id)
             if not actions:

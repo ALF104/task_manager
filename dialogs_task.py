@@ -32,14 +32,12 @@ from app.core.database import (
 
 # --- Task Details Dialog ---
 class TaskDetailsDialog(QDialog):
-# ... (rest of the file is identical) ...
     task_saved = Signal() # Emits when a task is saved (new or updated)
 
     def __init__(self, task_data, parent=None, is_new_task=False):
         super().__init__(parent)
         self.task_data = task_data if task_data else {}
         self.task_id = task_data.get('id') if task_data else None
-# ... (rest of the file is identical) ...
         self.is_new_task = is_new_task
         self.temp_show_dates = set()
 
@@ -48,7 +46,6 @@ class TaskDetailsDialog(QDialog):
         self.setMinimumWidth(500)
 
         self.layout = QVBoxLayout(self)
-# ... (rest of the file is identical) ...
         form_layout = QFormLayout()
 
         self.desc_entry = QLineEdit(self.task_data.get('description', ''))
@@ -60,41 +57,35 @@ class TaskDetailsDialog(QDialog):
         # --- END MODIFIED ---
 
         self.priority_combo = QComboBox()
-# ... (rest of the file is identical) ...
         self.priority_combo.addItems(["Low", "Medium", "High"])
         self.priority_combo.setCurrentText(self.task_data.get('priority', 'Medium'))
         form_layout.addRow("Priority:", self.priority_combo)
 
         self.deadline_layout = QHBoxLayout()
         current_deadline = self.task_data.get('deadline')
-# ... (rest of the file is identical) ...
         self.current_qdate_deadline = QDate.fromString(current_deadline, "yyyy-MM-dd") if current_deadline else None
         self.deadline_label = QLabel(current_deadline if current_deadline else "No Deadline")
         deadline_button = QPushButton("Change...")
         deadline_button.clicked.connect(self._select_deadline)
         self.deadline_layout.addWidget(self.deadline_label)
-# ... (rest of the file is identical) ...
         self.deadline_layout.addWidget(deadline_button)
         self.deadline_layout.addStretch()
         form_layout.addRow("Deadline:", self.deadline_layout)
 
         if not self.is_new_task:
             added_label = QLabel(self.task_data.get('date_added', 'N/A'))
-# ... (rest of the file is identical) ...
             form_layout.addRow("Date Added:", added_label)
             
             # --- NEW: Show Focus Time (for Feature 2) ---
             try:
                 # Get total minutes from DB
                 total_minutes = get_total_focus_time_for_task(self.task_id)
-# ... (rest of the file is identical) ...
                 # Format into hours and minutes
                 hours, minutes = divmod(total_minutes, 60)
                 focus_time_str = f"{int(hours)}h {int(minutes)}m" if hours > 0 else f"{int(minutes)}m"
                 
                 focus_label = QLabel(focus_time_str)
                 form_layout.addRow("Total Focus Time:", focus_label)
-# ... (rest of the file is identical) ...
             except Exception as e:
                 print(f"Error loading focus time for task {self.task_id}: {e}")
             # --- END NEW ---
@@ -102,7 +93,6 @@ class TaskDetailsDialog(QDialog):
         self.layout.addLayout(form_layout)
 
         show_on_group = QGroupBox("Task Visibility")
-# ... (rest of the file is identical) ...
         show_on_layout = QVBoxLayout(show_on_group)
 
         self.show_always_check = QCheckBox("Always show in Today's Tasks (until completed)")
@@ -111,14 +101,12 @@ class TaskDetailsDialog(QDialog):
         show_on_layout.addWidget(self.show_always_check)
 
         self.manage_show_dates_button = QPushButton("Manage 'Show On' Dates")
-# ... (rest of the file is identical) ...
         self.manage_show_dates_button.clicked.connect(self._open_manage_show_dates)
 
         self.manage_show_dates_button.setEnabled(not is_always_pending)
         self.show_always_check.toggled.connect(
             lambda checked: self.manage_show_dates_button.setEnabled(not checked)
         )
-# ... (rest of the file is identical) ...
         show_on_layout.addWidget(self.manage_show_dates_button)
 
         self.layout.addWidget(show_on_group)
@@ -126,7 +114,6 @@ class TaskDetailsDialog(QDialog):
         # --- SUB-TASK SECTION ---
         # Only show the sub-task section if we are editing an *existing* task
         if not self.is_new_task and self.task_id:
-# ... (rest of the file is identical) ...
             sub_task_group = QGroupBox("Sub-tasks")
             sub_task_layout = QVBoxLayout(sub_task_group)
             
@@ -134,13 +121,11 @@ class TaskDetailsDialog(QDialog):
             sub_task_layout.addWidget(self.sub_task_list_widget)
             
             sub_task_button_layout = QHBoxLayout()
-# ... (rest of the file is identical) ...
             add_sub_task_btn = QPushButton("Add Sub-task")
             add_sub_task_btn.clicked.connect(self._add_sub_task)
             edit_sub_task_btn = QPushButton("Edit Sub-task")
             edit_sub_task_btn.clicked.connect(self._edit_sub_task)
             delete_sub_task_btn = QPushButton("Delete Sub-task")
-# ... (rest of the file is identical) ...
             delete_sub_task_btn.clicked.connect(self._delete_sub_task)
             
             sub_task_button_layout.addWidget(add_sub_task_btn)
@@ -149,7 +134,6 @@ class TaskDetailsDialog(QDialog):
             sub_task_layout.addLayout(sub_task_button_layout)
             
             self.layout.addWidget(sub_task_group)
-# ... (rest of the file is identical) ...
             
             self._load_sub_tasks() # Load existing sub-tasks
         # --- END OF SUB-TASK SECTION ---
@@ -157,7 +141,6 @@ class TaskDetailsDialog(QDialog):
         self.notes_editor = QPlainTextEdit(self.task_data.get('notes', ''))
         self.notes_editor.setPlaceholderText("Enter notes for this task...")
         self.layout.addWidget(QLabel("Notes:"))
-# ... (rest of the file is identical) ...
         self.layout.addWidget(self.notes_editor, 1)
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel)
@@ -190,26 +173,22 @@ class TaskDetailsDialog(QDialog):
     # --- END NEW ---
 
     def _select_deadline(self):
-# ... (rest of the file is identical) ...
         dialog = QDialog(self); layout = QVBoxLayout(dialog); calendar = QCalendarWidget(); calendar.setGridVisible(True)
         if self.current_qdate_deadline and self.current_qdate_deadline.isValid(): calendar.setSelectedDate(self.current_qdate_deadline)
         else: calendar.setSelectedDate(QDate.currentDate())
         layout.addWidget(calendar)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Reset)
-# ... (rest of the file is identical) ...
         bb.accepted.connect(dialog.accept); bb.rejected.connect(dialog.reject); bb.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(lambda: calendar.setSelectedDate(QDate()))
         layout.addWidget(bb)
         if dialog.exec():
             selected_qdate = calendar.selectedDate()
             if selected_qdate.isValid():
-# ... (rest of the file is identical) ...
                 self.current_qdate_deadline = selected_qdate; self.deadline_label.setText(selected_qdate.toString("yyyy-MM-dd"))
             else:
                 self.current_qdate_deadline = None; self.deadline_label.setText("No Deadline")
 
     def save_details(self):
         new_desc = self.desc_entry.text().strip()
-# ... (rest of the file is identical) ...
         if not new_desc:
             QMessageBox.warning(self, "Input Error", "Description cannot be empty.")
             return
@@ -227,7 +206,6 @@ class TaskDetailsDialog(QDialog):
                 new_task_data = {
                     'id': str(uuid.uuid4()),
                     'description': new_desc,
-# ... (rest of the file is identical) ...
                     'status': 'pending',
                     'date_added': datetime.now().strftime("%Y-%m-%d"),
                     'deadline': deadline_str,
@@ -235,27 +213,23 @@ class TaskDetailsDialog(QDialog):
                     'category': category, # <-- Use new variable
                     'notes': self.notes_editor.toPlainText(),
                     'show_mode': show_mode,
-# ... (rest of the file is identical) ...
                     'parent_task_id': None # Explicitly set new tasks as top-level
                 }
                 new_task_id = add_task(new_task_data)
 
                 if self.temp_show_dates:
                     conn = connect_db()
-# ... (rest of the file is identical) ...
                     try:
                         for q_date in self.temp_show_dates:
                             add_task_show_date(new_task_id, q_date.toString("yyyy-MM-dd"), db_conn=conn)
                         conn.commit()
                     except Exception as e:
-# ... (rest of the file is identical) ...
                         conn.rollback()
                         raise e
                     finally:
                         conn.close()
             else:
                 update_task_details(
-# ... (rest of the file is identical) ...
                     self.task_id, new_desc, self.priority_combo.currentText(),
                     category, # <-- Use new variable
                     deadline_str, self.notes_editor.toPlainText(),
@@ -263,27 +237,23 @@ class TaskDetailsDialog(QDialog):
                 )
 
             self.task_saved.emit()
-# ... (rest of the file is identical) ...
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to save task details: {e}")
 
     def _open_manage_show_dates(self):
         if self.is_new_task:
-# ... (rest of the file is identical) ...
             dialog = ManageShowDatesDialog(task_id=None, initial_dates_set=self.temp_show_dates, parent=self)
             if dialog.exec():
                 self.temp_show_dates = dialog.get_selected_dates()
         else:
             dialog = ManageShowDatesDialog(task_id=self.task_id, initial_dates_set=None, parent=self)
-# ... (rest of the file is identical) ...
             dialog.exec()
             self.task_saved.emit()
 
     # --- METHODS FOR SUB-TASKS ---
 
     def _load_sub_tasks(self):
-# ... (rest of the file is identical) ...
         """ Clears and re-loads the sub-task list widget. """
         if not hasattr(self, 'sub_task_list_widget'):
             return # Should not happen, but a good safeguard
@@ -291,20 +261,17 @@ class TaskDetailsDialog(QDialog):
         self.sub_task_list_widget.clear()
         try:
             sub_tasks = get_sub_tasks(self.task_id, status="all")
-# ... (rest of the file is identical) ...
             if not sub_tasks:
                 item = QListWidgetItem("No sub-tasks created.")
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
                 item.setForeground(QColor("gray"))
                 self.sub_task_list_widget.addItem(item)
-# ... (rest of the file is identical) ...
                 return
 
             for sub_task in sub_tasks:
                 status_icon = "✓" if sub_task['status'] == 'completed' else "☐"
                 item_text = f"{status_icon} {sub_task['description']}"
                 item = QListWidgetItem(item_text)
-# ... (rest of the file is identical) ...
                 # Store the *entire* sub-task dictionary in the item
                 item.setData(Qt.ItemDataRole.UserRole, sub_task)
                 self.sub_task_list_widget.addItem(item)
@@ -313,14 +280,12 @@ class TaskDetailsDialog(QDialog):
             QMessageBox.critical(self, "Database Error", f"Failed to load sub-tasks: {e}")
 
     def _add_sub_task(self):
-# ... (rest of the file is identical) ...
         """ Adds a new sub-task to the current task. """
         desc, ok = QInputDialog.getText(self, "Add Sub-task", "Enter new sub-task description:")
         if ok and desc:
             try:
                 # Create a new sub-task, inheriting parent's category
                 new_sub_task_data = {
-# ... (rest of the file is identical) ...
                     'id': str(uuid.uuid4()),
                     'description': desc,
                     'status': 'pending',
@@ -329,21 +294,18 @@ class TaskDetailsDialog(QDialog):
                     'priority': 'Medium', # Default priority
                     'category': self.task_data.get('category', 'General'), # Inherit category
                     'notes': "",
-# ... (rest of the file is identical) ...
                     'show_mode': 'auto',
                     'parent_task_id': self.task_id # <-- THIS IS THE LINK
                 }
                 add_task(new_sub_task_data)
                 self._load_sub_tasks() # Refresh the list
                 self.task_saved.emit() # Tell the main tab to refresh
-# ... (rest of the file is identical) ...
             except Exception as e:
                  QMessageBox.critical(self, "Database Error", f"Failed to add sub-task: {e}")
 
     def _edit_sub_task(self):
         """ Opens the TaskDetailsDialog for the selected sub-task. """
         current_item = self.sub_task_list_widget.currentItem()
-# ... (rest of the file is identical) ...
         if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
             QMessageBox.warning(self, "Edit Error", "Please select a sub-task to edit.")
             return
@@ -351,27 +313,23 @@ class TaskDetailsDialog(QDialog):
         sub_task_data = current_item.data(Qt.ItemDataRole.UserRole)
         
         # We can re-use the *same* TaskDetailsDialog class to edit the sub-task
-# ... (rest of the file is identical) ...
         dialog = TaskDetailsDialog(sub_task_data, self, is_new_task=False)
         # When the sub-task dialog saves, we want to:
         # 1. Refresh *this* dialog's sub-task list
         dialog.task_saved.connect(self._load_sub_tasks)
         # 2. Tell the *main window* that data has changed
-# ... (rest of the file is identical) ...
         dialog.task_saved.connect(self.task_saved)
         dialog.exec()
 
     def _delete_sub_task(self):
         """ Deletes the selected sub-task. """
         current_item = self.sub_task_list_widget.currentItem()
-# ... (rest of the file is identical) ...
         if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
             QMessageBox.warning(self, "Delete Error", "Please select a sub-task to delete.")
             return
 
         sub_task_data = current_item.data(Qt.ItemDataRole.UserRole)
         sub_task_id = sub_task_data['id']
-# ... (rest of the file is identical) ...
         sub_task_desc = sub_task_data['description']
         
         reply = QMessageBox.question(self, 'Confirm Delete',
@@ -379,28 +337,24 @@ class TaskDetailsDialog(QDialog):
                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                                    QMessageBox.StandardButton.No)
         
-# ... (rest of the file is identical) ...
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 delete_task(sub_task_id) # This will cascade if needed
                 self._load_sub_tasks() # Refresh the list
                 self.task_saved.emit() # Tell the main tab to refresh
             except Exception as e:
-# ... (rest of the file is identical) ...
                 QMessageBox.critical(self, "Database Error", f"Failed to delete sub-task: {e}")
 
 
 # --- Manage Show Dates Dialog ---
 class ManageShowDatesDialog(QDialog):
     def __init__(self, task_id=None, initial_dates_set=None, parent=None):
-# ... (rest of the file is identical) ...
         super().__init__(parent)
         self.task_id = task_id
         # Use the passed set (for new tasks) or create an empty one (for existing)
         self.selected_dates = initial_dates_set if initial_dates_set is not None else set()
 
         self.setWindowTitle("Manage 'Show On' Dates")
-# ... (rest of the file is identical) ...
         self.setMinimumSize(400, 300)
 
         self.layout = QHBoxLayout(self)
@@ -408,7 +362,6 @@ class ManageShowDatesDialog(QDialog):
         # Left side: Calendar
         calendar_layout = QVBoxLayout()
         self.calendar = QCalendarWidget()
-# ... (rest of the file is identical) ...
         self.calendar.setGridVisible(True)
         self.calendar.clicked.connect(self._on_date_clicked)
         calendar_layout.addWidget(QLabel("Click a date to add/remove it:"))
@@ -416,13 +369,11 @@ class ManageShowDatesDialog(QDialog):
 
         # Right side: List of dates
         list_layout = QVBoxLayout()
-# ... (rest of the file is identical) ...
         self.dates_list_widget = QListWidget()
         remove_button = QPushButton("Remove Selected Date")
         remove_button.clicked.connect(self._remove_date)
         list_layout.addWidget(QLabel("Scheduled Dates:"))
         list_layout.addWidget(self.dates_list_widget)
-# ... (rest of the file is identical) ...
         list_layout.addWidget(remove_button)
 
         self.layout.addLayout(calendar_layout, 1)
@@ -430,14 +381,12 @@ class ManageShowDatesDialog(QDialog):
 
         close_button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         close_button_box.rejected.connect(self.accept) # Close maps to accept
-# ... (rest of the file is identical) ...
         list_layout.addWidget(close_button_box)
 
         self._load_and_highlight_dates()
 
     def _load_and_highlight_dates(self):
         """ Fetches dates from DB (if task_id) or uses self.selected_dates, then populates UI. """
-# ... (rest of the file is identical) ...
         self.dates_list_widget.clear()
 
         # Clear all previous formats
@@ -445,7 +394,6 @@ class ManageShowDatesDialog(QDialog):
         self.calendar.setDateTextFormat(QDate(), default_format)
 
         highlight_format = QTextCharFormat()
-# ... (rest of the file is identical) ...
         highlight_format.setBackground(QColor("#1F6AA5"))
         highlight_format.setForeground(QColor("white"))
 
@@ -453,7 +401,6 @@ class ManageShowDatesDialog(QDialog):
             # If it's an existing task, load from DB into self.selected_dates
             if self.task_id and not self.selected_dates: # Only load if not already populated
                  dates_str_list = get_show_dates_for_task(self.task_id)
-# ... (rest of the file is identical) ...
                  self.selected_dates = {QDate.fromString(d, "yyyy-MM-dd") for d in dates_str_list if QDate.fromString(d, "yyyy-MM-dd").isValid()}
 
             # Now use self.selected_dates (either from DB or passed in)
@@ -461,28 +408,24 @@ class ManageShowDatesDialog(QDialog):
 
             for q_date in sorted_dates:
                 self.dates_list_widget.addItem(q_date.toString("yyyy-MM-dd"))
-# ... (rest of the file is identical) ...
                 self.calendar.setDateTextFormat(q_date, highlight_format)
         except Exception as e:
             print(f"Error loading show dates: {e}")
 
     def _on_date_clicked(self, q_date):
         """ Adds or removes the clicked date from the set/DB. """
-# ... (rest of the file is identical) ...
         date_str = q_date.toString("yyyy-MM-dd")
         if q_date in self.selected_dates:
             # Date already exists, so remove it
             self.selected_dates.remove(q_date)
             if self.task_id: # If existing task, update DB
                 try: remove_task_show_date(self.task_id, date_str)
-# ... (rest of the file is identical) ...
                 except Exception as e: QMessageBox.critical(self, "Database Error", f"Could not remove date: {e}")
         else:
             # Date does not exist, add it
             self.selected_dates.add(q_date)
             if self.task_id: # If existing task, update DB
                 try: add_task_show_date(self.task_id, date_str)
-# ... (rest of the file is identical) ...
                 except Exception as e: QMessageBox.critical(self, "Database Error", f"Could not add date: {e}")
 
         self._load_and_highlight_dates() # Refresh list and highlights
@@ -490,7 +433,6 @@ class ManageShowDatesDialog(QDialog):
     def _remove_date(self):
         """ Removes the selected date from the task's show_dates. """
         current_item = self.dates_list_widget.currentItem()
-# ... (rest of the file is identical) ...
         if not current_item:
             QMessageBox.warning(self, "Remove Error", "Please select a date from the list to remove.")
             return
@@ -499,7 +441,6 @@ class ManageShowDatesDialog(QDialog):
         q_date = QDate.fromString(date_str, "yyyy-MM-dd")
 
         if q_date in self.selected_dates:
-# ... (rest of the file is identical) ...
             self.selected_dates.remove(q_date)
             if self.task_id: # If existing task, update DB
                 try: remove_task_show_date(self.task_id, date_str)
@@ -508,6 +449,5 @@ class ManageShowDatesDialog(QDialog):
         self._load_and_highlight_dates() # Refresh
 
     def get_selected_dates(self):
-# ... (rest of the file is identical) ...
         """ Returns the set of selected QDate objects (for new tasks). """
         return self.selected_dates

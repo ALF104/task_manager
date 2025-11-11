@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timedelta, time, date
 import sqlite3 # For IntegrityError
-import sys # <-- NEW IMPORT
+import sys 
 
 # --- PySide6 Imports ---
 from PySide6.QtWidgets import (
@@ -31,20 +31,22 @@ from app.core.database import (
 )
 # We need this for the "Manage Automations" button
 from app.widgets.dialogs_automation import ManageAutomationsDialog
-# --- NEW: Import for Statistics Dialog ---
 try:
     from app.widgets.dialogs_stats import StatisticsDialog
 except ImportError:
     print("Could not import StatisticsDialog. Make sure pyside6-addons is installed.")
     StatisticsDialog = None # Set to None as a safeguard
+    
+# --- NEW: Import for Category Dialog ---
+from app.widgets.dialogs_category import ManageCategoriesDialog
 # --- END NEW ---
+
 # Get the app version from our central init file
 from app import APP_VERSION
 
 
 # --- Pomodoro Settings Dialog ---
 class PomodoroSettingsDialog(QDialog):
-# ... (This class is unchanged) ...
     """
     A separate dialog just for managing Pomodoro Timer settings.
     """
@@ -107,6 +109,8 @@ class SettingsDialog(QDialog):
     theme_changed = Signal()
     pomodoro_settings_changed = Signal()
     personalization_changed = Signal()
+    # --- NEW SIGNAL ---
+    categories_updated = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -152,6 +156,12 @@ class SettingsDialog(QDialog):
         self.automation_button = QPushButton("Manage Automations")
         self.automation_button.clicked.connect(self._open_automations_dialog)
         other_layout.addWidget(self.automation_button)
+        
+        # --- NEW: Category Manager Button ---
+        self.categories_button = QPushButton("Manage Task Categories")
+        self.categories_button.clicked.connect(self._open_categories_dialog)
+        other_layout.addWidget(self.categories_button)
+        # --- END NEW ---
 
         self.export_button = QPushButton("Export Tasks to CSV")
         self.export_button.clicked.connect(self.parent_window._export_tasks)
@@ -196,7 +206,6 @@ class SettingsDialog(QDialog):
         self.layout.addWidget(close_button)
 
     def _save_user_name(self):
-# ... (rest of the file is identical) ...
         """Saves the user name when editing is finished."""
         try:
             set_app_state('user_name', self.name_entry.text())
@@ -222,6 +231,14 @@ class SettingsDialog(QDialog):
     def _open_automations_dialog(self):
         dialog = ManageAutomationsDialog(self)
         dialog.exec()
+
+    # --- NEW: Category Dialog Opener ---
+    def _open_categories_dialog(self):
+        dialog = ManageCategoriesDialog(self)
+        # Connect the dialog's signal to this dialog's signal
+        dialog.categories_updated.connect(self.categories_updated)
+        dialog.exec()
+    # --- END NEW ---
 
     # --- NEW: Statistics Dialog Opener ---
     def _open_stats_dialog(self):
@@ -470,9 +487,6 @@ class HistoryDialog(QDialog):
             try:
                 update_focus_log_notes(log_id, text)
                 # Refresh the entire view to show the new notes
-                self._on_date_selected(self.selected_date_label.fontMetrics().boundingRect(self.selected_date_label.text()).width() and QDate.fromString(self.selected_date_label.text().split(', ')[1], "MMM d yyyy"))
-                # A bit of a hack to get the QDate back from the label
-                # Let's find a cleaner way...
                 
                 # --- Cleaner Refresh ---
                 # Get the QCalendarWidget from the layout
