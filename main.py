@@ -344,6 +344,10 @@ class MainWindow(QMainWindow):
              self.daily_schedule_tab.set_current_date(self.today_tab.dashboard_date)
              # Use a QTimer to ensure the viewport is ready before resizing
              QTimer.singleShot(50, self.daily_schedule_tab.refresh_display)
+        # --- NEW: Refresh tags when switching to task manager ---
+        elif current_widget == self.task_manager_tab:
+             self.task_manager_tab._load_tags()
+        # --- END NEW ---
 
     def _open_task_details_dialog(self, task_data):
         """ 
@@ -361,7 +365,7 @@ class MainWindow(QMainWindow):
         print("[Refresh] Task data changed. Refreshing tabs...")
         if hasattr(self, 'task_manager_tab'):
             self.task_manager_tab._display_tasks()
-            # self.task_manager_tab._load_categories() # <-- This is now done by _on_categories_updated
+            self.task_manager_tab._load_tags() # <-- NEW: Refresh tags
         
         if hasattr(self, 'today_tab'):
             self.today_tab._refresh_today_dashboard()
@@ -391,8 +395,10 @@ class MainWindow(QMainWindow):
         print("[Refresh] Categories updated. Refreshing category lists...")
         if hasattr(self, 'task_manager_tab'):
             self.task_manager_tab._load_categories()
-        # We also need to refresh the task details dialog IF it's open,
-        # but it's simpler to just let it load fresh when it opens next.
+        # --- NEW: Also refresh tags when categories change ---
+        if hasattr(self, 'task_manager_tab'):
+            self.task_manager_tab._load_tags()
+        # --- END NEW ---
     # --- END NEW ---
 
     # --- Settings Dialog Functions ---
@@ -401,8 +407,9 @@ class MainWindow(QMainWindow):
         dialog.theme_changed.connect(self.load_theme)
         dialog.pomodoro_settings_changed.connect(self.persistent_timer_frame.reload_settings_and_reset_timer)
         dialog.personalization_changed.connect(self._update_window_title)
-        # --- NEW: Connect category signal ---
         dialog.categories_updated.connect(self._on_categories_updated)
+        dialog.schedule_settings_changed.connect(self.daily_schedule_tab.reload_settings)
+        
         dialog.exec()
         
     def _export_tasks(self):
@@ -420,7 +427,8 @@ class MainWindow(QMainWindow):
             # Ensure all potential headers are included
             headers = ['id', 'description', 'status', 'priority', 'category', 'deadline', 
                        'date_added', 'date_completed', 'notes', 'schedule_event_id',
-                       'created_by_automation_id', 'show_mode', 'parent_task_id']
+                       'created_by_automation_id', 'show_mode', 'parent_task_id',
+                       'tags', 'pending_dependency_count', 'tasks_blocked_count'] # <-- Added new fields
 
             with open(file_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=headers, extrasaction='ignore')

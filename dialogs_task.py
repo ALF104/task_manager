@@ -26,11 +26,14 @@ from app.core.database import (
     get_show_dates_for_task, remove_task_show_date,
     get_sub_tasks, delete_task,
     get_total_focus_time_for_task,
-    get_categories # <-- NEW IMPORT
+    get_categories,
+    update_tags_for_task,
+    get_all_pending_tasks, get_task_dependencies, # <-- NEW IMPORTS
+    add_task_dependency, remove_task_dependency # <-- NEW IMPORTS
 )
 
 
-# --- Task Details Dialog ---
+# --- Task Details Dialog (MODIFIED) ---
 class TaskDetailsDialog(QDialog):
     task_saved = Signal() # Emits when a task is saved (new or updated)
 
@@ -51,10 +54,13 @@ class TaskDetailsDialog(QDialog):
         self.desc_entry = QLineEdit(self.task_data.get('description', ''))
         form_layout.addRow("Description:", self.desc_entry)
 
-        # --- MODIFIED: Category QLineEdit replaced with QComboBox ---
         self.category_combo = QComboBox()
         form_layout.addRow("Category:", self.category_combo)
-        # --- END MODIFIED ---
+        
+        self.tags_entry = QLineEdit()
+        self.tags_entry.setPlaceholderText("e.g., project-alpha, urgent, client")
+        self.tags_entry.setText(self.task_data.get('tags', ''))
+        form_layout.addRow("Tags (comma-sep):", self.tags_entry)
 
         self.priority_combo = QComboBox()
         self.priority_combo.addItems(["Low", "Medium", "High"])
@@ -76,28 +82,27 @@ class TaskDetailsDialog(QDialog):
             added_label = QLabel(self.task_data.get('date_added', 'N/A'))
             form_layout.addRow("Date Added:", added_label)
             
-            # --- NEW: Show Focus Time (for Feature 2) ---
             try:
-                # Get total minutes from DB
                 total_minutes = get_total_focus_time_for_task(self.task_id)
-                # Format into hours and minutes
                 hours, minutes = divmod(total_minutes, 60)
                 focus_time_str = f"{int(hours)}h {int(minutes)}m" if hours > 0 else f"{int(minutes)}m"
-                
                 focus_label = QLabel(focus_time_str)
                 form_layout.addRow("Total Focus Time:", focus_label)
             except Exception as e:
                 print(f"Error loading focus time for task {self.task_id}: {e}")
-            # --- END NEW ---
 
         self.layout.addLayout(form_layout)
 
+        # --- Horizontal layout for Visibility and Dependencies ---
+        middle_layout = QHBoxLayout()
+        
         show_on_group = QGroupBox("Task Visibility")
         show_on_layout = QVBoxLayout(show_on_group)
 
         self.show_always_check = QCheckBox("Always show in Today's Tasks (until completed)")
         is_always_pending = self.task_data.get('show_mode', 'auto') == 'always_pending'
         self.show_always_check.setChecked(is_always_pending)
+        self.show_always_check.setToolTip("Overrides all other visibility settings.")
         show_on_layout.addWidget(self.show_always_check)
 
         self.manage_show_dates_button = QPushButton("Manage 'Show On' Dates")
@@ -108,16 +113,42 @@ class TaskDetailsDialog(QDialog):
             lambda checked: self.manage_show_dates_button.setEnabled(not checked)
         )
         show_on_layout.addWidget(self.manage_show_dates_button)
-
-        self.layout.addWidget(show_on_group)
+        show_on_layout.addStretch()
+        middle_layout.addWidget(show_on_group)
+        
+        # --- NEW: Dependencies Group Box ---
+        # Only show if we are editing an *existing* task
+        if not self.is_new_task and self.task_id:
+            dep_group = QGroupBox("Dependencies (Prerequisites)")
+            dep_layout = QVBoxLayout(dep_group)
+            
+            self.dependency_list_widget = QListWidget()
+            self.dependency_list_widget.setToolTip("This task cannot be completed until these tasks are done.")
+            dep_layout.addWidget(self.dependency_list_widget)
+            
+            dep_btn_layout = QHBoxLayout()
+            add_dep_btn = QPushButton("Add Prerequisite...")
+            add_dep_btn.clicked.connect(self._add_dependency)
+            remove_dep_btn = QPushButton("Remove Selected")
+            remove_dep_btn.clicked.connect(self._remove_dependency)
+            
+            dep_btn_layout.addWidget(add_dep_btn)
+            dep_btn_layout.addWidget(remove_dep_btn)
+            dep_layout.addLayout(dep_btn_layout)
+            middle_layout.addWidget(dep_group)
+            
+            self._load_dependencies() # Load existing dependencies
+        # --- END NEW ---
+        
+        self.layout.addLayout(middle_layout)
         
         # --- SUB-TASK SECTION ---
-        # Only show the sub-task section if we are editing an *existing* task
         if not self.is_new_task and self.task_id:
             sub_task_group = QGroupBox("Sub-tasks")
             sub_task_layout = QVBoxLayout(sub_task_group)
             
             self.sub_task_list_widget = QListWidget()
+            self.sub_task_list_widget.setToolTip("Sub-tasks must be completed before the parent task can be completed.")
             sub_task_layout.addWidget(self.sub_task_list_widget)
             
             sub_task_button_layout = QHBoxLayout()
@@ -148,11 +179,8 @@ class TaskDetailsDialog(QDialog):
         self.button_box.rejected.connect(self.reject)
         self.layout.addWidget(self.button_box)
         
-        # --- NEW: Load categories into combo box ---
         self._load_categories()
-        # --- END NEW ---
 
-    # --- NEW: Category Loader ---
     def _load_categories(self):
         """Loads categories from DB into the combo box."""
         try:
@@ -161,7 +189,6 @@ class TaskDetailsDialog(QDialog):
             category_names = [cat['name'] for cat in categories]
             self.category_combo.addItems(category_names)
             
-            # Set the task's current category
             current_category = self.task_data.get('category', 'General')
             if current_category in category_names:
                 self.category_combo.setCurrentText(current_category)
@@ -170,22 +197,18 @@ class TaskDetailsDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load categories: {e}")
             self.category_combo.addItem("General")
-    # --- END NEW ---
 
     def _select_deadline(self):
-        dialog = QDialog(self); layout = QVBoxLayout(dialog); calendar = QCalendarWidget(); calendar.setGridVisible(True)
-        if self.current_qdate_deadline and self.current_qdate_deadline.isValid(): calendar.setSelectedDate(self.current_qdate_deadline)
-        else: calendar.setSelectedDate(QDate.currentDate())
-        layout.addWidget(calendar)
-        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel | QDialogButtonBox.StandardButton.Reset)
-        bb.accepted.connect(dialog.accept); bb.rejected.connect(dialog.reject); bb.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(lambda: calendar.setSelectedDate(QDate()))
-        layout.addWidget(bb)
+        dialog = DeadlineCalendarDialog(self.current_qdate_deadline, self)
+        
         if dialog.exec():
-            selected_qdate = calendar.selectedDate()
+            selected_qdate = dialog.get_selected_date()
             if selected_qdate.isValid():
-                self.current_qdate_deadline = selected_qdate; self.deadline_label.setText(selected_qdate.toString("yyyy-MM-dd"))
-            else:
-                self.current_qdate_deadline = None; self.deadline_label.setText("No Deadline")
+                self.current_qdate_deadline = selected_qdate
+                self.deadline_label.setText(selected_qdate.toString("yyyy-MM-dd"))
+            else: # Reset was hit
+                self.current_qdate_deadline = None
+                self.deadline_label.setText("No Deadline")
 
     def save_details(self):
         new_desc = self.desc_entry.text().strip()
@@ -195,49 +218,58 @@ class TaskDetailsDialog(QDialog):
 
         deadline_str = self.current_qdate_deadline.toString("yyyy-MM-dd") if self.current_qdate_deadline else None
         show_mode = 'always_pending' if self.show_always_check.isChecked() else 'auto'
-        # --- MODIFIED: Read from category_combo ---
         category = self.category_combo.currentText()
-        if not category: # Safeguard if list is empty
+        if not category: 
             category = "General"
-        # --- END MODIFIED ---
+            
+        tags_str = self.tags_entry.text().strip()
+        tag_list = [tag.strip() for tag in tags_str.split(',') if tag.strip()]
 
         try:
-            if self.is_new_task:
-                new_task_data = {
-                    'id': str(uuid.uuid4()),
-                    'description': new_desc,
-                    'status': 'pending',
-                    'date_added': datetime.now().strftime("%Y-%m-%d"),
-                    'deadline': deadline_str,
-                    'priority': self.priority_combo.currentText(),
-                    'category': category, # <-- Use new variable
-                    'notes': self.notes_editor.toPlainText(),
-                    'show_mode': show_mode,
-                    'parent_task_id': None # Explicitly set new tasks as top-level
-                }
-                new_task_id = add_task(new_task_data)
+            conn = connect_db() 
+            try:
+                if self.is_new_task:
+                    new_task_id = str(uuid.uuid4()) 
+                    new_task_data = {
+                        'id': new_task_id,
+                        'description': new_desc,
+                        'status': 'pending',
+                        'date_added': datetime.now().strftime("%Y-%m-%d"),
+                        'deadline': deadline_str,
+                        'priority': self.priority_combo.currentText(),
+                        'category': category,
+                        'notes': self.notes_editor.toPlainText(),
+                        'show_mode': show_mode,
+                        'parent_task_id': None 
+                    }
+                    add_task(new_task_data) 
 
-                if self.temp_show_dates:
-                    conn = connect_db()
-                    try:
+                    if tag_list:
+                        update_tags_for_task(new_task_id, tag_list, db_conn=conn)
+                    
+                    if self.temp_show_dates:
                         for q_date in self.temp_show_dates:
                             add_task_show_date(new_task_id, q_date.toString("yyyy-MM-dd"), db_conn=conn)
-                        conn.commit()
-                    except Exception as e:
-                        conn.rollback()
-                        raise e
-                    finally:
-                        conn.close()
-            else:
-                update_task_details(
-                    self.task_id, new_desc, self.priority_combo.currentText(),
-                    category, # <-- Use new variable
-                    deadline_str, self.notes_editor.toPlainText(),
-                    show_mode
-                )
+                else:
+                    update_task_details(
+                        self.task_id, new_desc, self.priority_combo.currentText(),
+                        category, 
+                        deadline_str, self.notes_editor.toPlainText(),
+                        show_mode
+                    )
+                    
+                    update_tags_for_task(self.task_id, tag_list, db_conn=conn)
+
+                conn.commit() 
+            except Exception as e:
+                conn.rollback()
+                raise e 
+            finally:
+                conn.close()
 
             self.task_saved.emit()
             self.accept()
+            
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to save task details: {e}")
 
@@ -249,14 +281,13 @@ class TaskDetailsDialog(QDialog):
         else:
             dialog = ManageShowDatesDialog(task_id=self.task_id, initial_dates_set=None, parent=self)
             dialog.exec()
-            self.task_saved.emit()
+            self.task_saved.emit() # Emit signal in case dates were changed
 
     # --- METHODS FOR SUB-TASKS ---
 
     def _load_sub_tasks(self):
-        """ Clears and re-loads the sub-task list widget. """
         if not hasattr(self, 'sub_task_list_widget'):
-            return # Should not happen, but a good safeguard
+            return 
             
         self.sub_task_list_widget.clear()
         try:
@@ -272,7 +303,6 @@ class TaskDetailsDialog(QDialog):
                 status_icon = "✓" if sub_task['status'] == 'completed' else "☐"
                 item_text = f"{status_icon} {sub_task['description']}"
                 item = QListWidgetItem(item_text)
-                # Store the *entire* sub-task dictionary in the item
                 item.setData(Qt.ItemDataRole.UserRole, sub_task)
                 self.sub_task_list_widget.addItem(item)
 
@@ -280,31 +310,28 @@ class TaskDetailsDialog(QDialog):
             QMessageBox.critical(self, "Database Error", f"Failed to load sub-tasks: {e}")
 
     def _add_sub_task(self):
-        """ Adds a new sub-task to the current task. """
         desc, ok = QInputDialog.getText(self, "Add Sub-task", "Enter new sub-task description:")
         if ok and desc:
             try:
-                # Create a new sub-task, inheriting parent's category
                 new_sub_task_data = {
                     'id': str(uuid.uuid4()),
                     'description': desc,
                     'status': 'pending',
                     'date_added': datetime.now().strftime("%Y-%m-%d"),
-                    'deadline': None, # Sub-tasks start with no deadline
-                    'priority': 'Medium', # Default priority
-                    'category': self.task_data.get('category', 'General'), # Inherit category
+                    'deadline': None, 
+                    'priority': 'Medium', 
+                    'category': self.task_data.get('category', 'General'), 
                     'notes': "",
                     'show_mode': 'auto',
-                    'parent_task_id': self.task_id # <-- THIS IS THE LINK
+                    'parent_task_id': self.task_id 
                 }
                 add_task(new_sub_task_data)
-                self._load_sub_tasks() # Refresh the list
-                self.task_saved.emit() # Tell the main tab to refresh
+                self._load_sub_tasks() 
+                self.task_saved.emit() 
             except Exception as e:
                  QMessageBox.critical(self, "Database Error", f"Failed to add sub-task: {e}")
 
     def _edit_sub_task(self):
-        """ Opens the TaskDetailsDialog for the selected sub-task. """
         current_item = self.sub_task_list_widget.currentItem()
         if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
             QMessageBox.warning(self, "Edit Error", "Please select a sub-task to edit.")
@@ -312,17 +339,12 @@ class TaskDetailsDialog(QDialog):
             
         sub_task_data = current_item.data(Qt.ItemDataRole.UserRole)
         
-        # We can re-use the *same* TaskDetailsDialog class to edit the sub-task
         dialog = TaskDetailsDialog(sub_task_data, self, is_new_task=False)
-        # When the sub-task dialog saves, we want to:
-        # 1. Refresh *this* dialog's sub-task list
         dialog.task_saved.connect(self._load_sub_tasks)
-        # 2. Tell the *main window* that data has changed
         dialog.task_saved.connect(self.task_saved)
         dialog.exec()
 
     def _delete_sub_task(self):
-        """ Deletes the selected sub-task. """
         current_item = self.sub_task_list_widget.currentItem()
         if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
             QMessageBox.warning(self, "Delete Error", "Please select a sub-task to delete.")
@@ -339,15 +361,79 @@ class TaskDetailsDialog(QDialog):
         
         if reply == QMessageBox.StandardButton.Yes:
             try:
-                delete_task(sub_task_id) # This will cascade if needed
-                self._load_sub_tasks() # Refresh the list
-                self.task_saved.emit() # Tell the main tab to refresh
+                delete_task(sub_task_id) 
+                self._load_sub_tasks() 
+                self.task_saved.emit() 
             except Exception as e:
                 QMessageBox.critical(self, "Database Error", f"Failed to delete sub-task: {e}")
+
+    # --- NEW: METHODS FOR DEPENDENCIES ---
+
+    def _load_dependencies(self):
+        """ Clears and re-loads the dependency list widget. """
+        if not hasattr(self, 'dependency_list_widget'):
+            return 
+            
+        self.dependency_list_widget.clear()
+        try:
+            dependencies = get_task_dependencies(self.task_id)
+            if not dependencies:
+                item = QListWidgetItem("No prerequisites.")
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                item.setForeground(QColor("gray"))
+                self.dependency_list_widget.addItem(item)
+                return
+
+            for task in dependencies:
+                status_icon = "✓" if task['status'] == 'completed' else "☐"
+                item_text = f"{status_icon} {task['description']}"
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, task) # Store task dict
+                self.dependency_list_widget.addItem(item)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Database Error", f"Failed to load dependencies: {e}")
+
+    def _add_dependency(self):
+        """ Opens a dialog to select a task to depend on. """
+        dialog = SelectDependencyDialog(self.task_id, self)
+        if dialog.exec():
+            selected_task_id = dialog.get_selected_task_id()
+            if selected_task_id:
+                try:
+                    add_task_dependency(self.task_id, selected_task_id)
+                    self._load_dependencies() # Refresh the list
+                    self.task_saved.emit() # Tell main tab to refresh
+                except Exception as e:
+                    QMessageBox.critical(self, "Database Error", f"Failed to add dependency: {e}")
+
+    def _remove_dependency(self):
+        """ Removes the selected dependency. """
+        current_item = self.dependency_list_widget.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            QMessageBox.warning(self, "Remove Error", "Please select a dependency to remove.")
+            return
+
+        dependency_task = current_item.data(Qt.ItemDataRole.UserRole)
+        
+        reply = QMessageBox.question(self, 'Confirm Remove',
+                                   f"Remove dependency on task:\n'{dependency_task['description']}'?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                remove_task_dependency(self.task_id, dependency_task['id'])
+                self._load_dependencies() # Refresh the list
+                self.task_saved.emit() # Tell main tab to refresh
+            except Exception as e:
+                QMessageBox.critical(self, "Database Error", f"Failed to remove dependency: {e}")
+    # --- END NEW ---
 
 
 # --- Manage Show Dates Dialog ---
 class ManageShowDatesDialog(QDialog):
+    # ... (omitted, no changes) ...
     def __init__(self, task_id=None, initial_dates_set=None, parent=None):
         super().__init__(parent)
         self.task_id = task_id
@@ -451,3 +537,117 @@ class ManageShowDatesDialog(QDialog):
     def get_selected_dates(self):
         """ Returns the set of selected QDate objects (for new tasks). """
         return self.selected_dates
+
+
+# --- NEW Reusable Deadline Dialog (Change 3) ---
+class DeadlineCalendarDialog(QDialog):
+    # ... (omitted, no changes) ...
+    def __init__(self, current_qdate, parent=None):
+        """
+        A consolidated dialog for selecting a task deadline.
+        current_qdate (QDate): The date to pre-select, or None.
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Select Deadline")
+        layout = QVBoxLayout(self)
+
+        self.calendar = QCalendarWidget()
+        self.calendar.setGridVisible(True)
+        
+        if current_qdate and current_qdate.isValid():
+             self.calendar.setSelectedDate(current_qdate)
+        else:
+             self.calendar.setSelectedDate(QDate.currentDate()) 
+        layout.addWidget(self.calendar)
+
+        # Add Ok, Cancel, and Reset buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | 
+                                      QDialogButtonBox.StandardButton.Cancel |
+                                      QDialogButtonBox.StandardButton.Reset) 
+        
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        # Reset button clears the date selection (sets it to invalid)
+        button_box.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(lambda: self.calendar.setSelectedDate(QDate())) 
+
+        layout.addWidget(button_box)
+
+    def get_selected_date(self):
+        """Returns the selected QDate (which may be invalid if Reset was hit)."""
+        return self.calendar.selectedDate()
+        
+# --- NEW: Select Dependency Dialog ---
+class SelectDependencyDialog(QDialog):
+    def __init__(self, current_task_id, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Prerequisite Task")
+        self.setMinimumWidth(400)
+        self.selected_task_id = None
+        self.current_task_id = current_task_id
+        
+        self.layout = QVBoxLayout(self)
+        self.layout.addWidget(QLabel("Select a task that must be completed *before* this one:"))
+        
+        self.task_list_widget = QListWidget()
+        self.layout.addWidget(self.task_list_widget, 1) # Give it stretch
+        
+        self._populate_tasks()
+        
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.button_box.accepted.connect(self._on_accept)
+        self.button_box.rejected.connect(self.reject)
+        self.layout.addWidget(self.button_box)
+        
+    def _populate_tasks(self):
+        """ Loads all *other* pending tasks into the list. """
+        self.task_list_widget.clear()
+        try:
+            # Get all pending tasks (parents and sub-tasks)
+            tasks = get_all_pending_tasks() 
+            if not tasks:
+                item = QListWidgetItem("No other pending tasks available.")
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+                self.task_list_widget.addItem(item)
+                return
+                
+            task_map = {t['id']: t for t in tasks}
+            
+            for task in tasks:
+                # --- Prevent circular dependencies ---
+                if task['id'] == self.current_task_id:
+                    continue # Can't depend on itself
+                if task.get('parent_task_id') == self.current_task_id:
+                    continue # Can't depend on one of its own sub-tasks
+                # --- End Prevent ---
+
+                desc = task['description']
+                parent_id = task.get('parent_task_id')
+                
+                if parent_id and parent_id in task_map:
+                    parent_name = task_map[parent_id].get('description', 'Parent')
+                    display_text = f"{parent_name}: {desc}"
+                else:
+                    display_text = desc
+                    
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, task['id']) # Store task ID
+                self.task_list_widget.addItem(item)
+                
+        except Exception as e:
+            print(f"Error populating dependency task dialog: {e}")
+            self.task_list_widget.addItem("Error loading tasks.")
+
+    def _on_accept(self):
+        """ User chose to add the selected dependency. """
+        current_item = self.task_list_widget.currentItem()
+        if not current_item or not current_item.data(Qt.ItemDataRole.UserRole):
+            QMessageBox.warning(self, "No Selection", "Please select a task from the list.")
+            return
+            
+        self.selected_task_id = current_item.data(Qt.ItemDataRole.UserRole)
+        self.accept()
+        
+    def get_selected_task_id(self):
+        """ Called by the parent to get the result. """
+        return self.selected_task_id
+# --- END NEW ---

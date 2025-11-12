@@ -129,8 +129,8 @@ def create_tables():
         date_added TEXT NOT NULL, deadline TEXT, priority TEXT, category TEXT,
         notes TEXT, date_completed TEXT, schedule_event_id TEXT,
         created_by_automation_id TEXT,
-        show_mode TEXT DEFAULT 'auto' NOT NULL,  /* 'auto' or 'always_pending' */
-        parent_task_id TEXT, /* <-- NEW: For sub-tasks */
+        show_mode TEXT DEFAULT 'auto' NOT NULL,
+        parent_task_id TEXT,
         FOREIGN KEY (parent_task_id) REFERENCES tasks (id) ON DELETE CASCADE
     )""")
     # --- Daily Notes Table ---
@@ -157,6 +157,8 @@ def create_tables():
     cursor.execute("INSERT OR IGNORE INTO app_state (key, value) VALUES ('pomodoro_long_break_min', '15')")
     cursor.execute("INSERT OR IGNORE INTO app_state (key, value) VALUES ('pomodoro_sessions', '4')")
     cursor.execute("INSERT OR IGNORE INTO app_state (key, value) VALUES ('user_name', '')")
+    cursor.execute("INSERT OR IGNORE INTO app_state (key, value) VALUES ('schedule_start_hour', '6')")
+    cursor.execute("INSERT OR IGNORE INTO app_state (key, value) VALUES ('schedule_end_hour', '23')")
 
     # --- Calendar Events Table (For Monthly Rota/Events) ---
     cursor.execute("""
@@ -224,7 +226,7 @@ def create_tables():
         task_id TEXT,
         date_completed TEXT NOT NULL,
         duration_minutes INTEGER NOT NULL,
-        session_type TEXT NOT NULL, /* 'work' or 'break' */
+        session_type TEXT NOT NULL,
         notes TEXT,
         FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE
     )""")
@@ -241,12 +243,81 @@ def create_tables():
                    (str(uuid.uuid4()), 'General', 0))
     # --- END NEW ---
     
+    # --- NEW: Task Templates Tables ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS task_templates (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT,
+        default_priority TEXT DEFAULT 'Medium',
+        default_category TEXT DEFAULT 'General'
+    )""")
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS template_tasks (
+        id TEXT PRIMARY KEY,
+        template_id TEXT NOT NULL,
+        description TEXT NOT NULL,
+        notes TEXT,
+        priority TEXT NOT NULL,
+        is_sub_task BOOLEAN NOT NULL,
+        relative_parent_id TEXT,
+        FOREIGN KEY (template_id) REFERENCES task_templates (id) ON DELETE CASCADE
+    )""")
+    # --- END NEW ---
+    
+    # --- NEW: Tagging Tables ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE
+    )""")
+    
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS task_tags (
+        task_id TEXT NOT NULL,
+        tag_id INTEGER NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE,
+        FOREIGN KEY (tag_id) REFERENCES tags (id) ON DELETE CASCADE,
+        PRIMARY KEY (task_id, tag_id)
+    )""")
+    # --- END NEW ---
+    
+    # --- NEW: Dependency Table ---
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS task_dependencies (
+        task_id TEXT NOT NULL,
+        depends_on_task_id TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks (id) ON DELETE CASCADE,
+        FOREIGN KEY (depends_on_task_id) REFERENCES tasks (id) ON DELETE CASCADE,
+        PRIMARY KEY (task_id, depends_on_task_id)
+    )""")
+    # --- END NEW ---
+    
     # --- MODIFIED: Run migrations *after* creating tables ---
     run_migrations(conn)
     # --- END MODIFIED ---
     
     conn.commit()
     conn.close()
+
+# --- Helper query string for joining tags and dependencies ---
+# This avoids repeating the same complex subqueries in every function
+TASK_JOINS_SUBQUERY = """
+    (SELECT GROUP_CONCAT(tags.name, ', ') 
+     FROM tags 
+     JOIN task_tags tt ON tt.tag_id = tags.id 
+     WHERE tt.task_id = t.id) AS tags,
+    
+    (SELECT COUNT(td.depends_on_task_id) 
+     FROM task_dependencies td
+     JOIN tasks dep_task ON td.depends_on_task_id = dep_task.id
+     WHERE td.task_id = t.id AND dep_task.status = 'pending') AS pending_dependency_count,
+     
+    (SELECT COUNT(td.task_id)
+     FROM task_dependencies td
+     WHERE td.depends_on_task_id = t.id) AS tasks_blocked_count
+"""
 
 # ========== Task Functions (MODIFIED for Sub-tasks) ==========
 def add_task(task_data):
@@ -270,39 +341,83 @@ def get_tasks(status="pending"):
     """
     Gets tasks of a given status.
     MODIFIED: Now *only* returns top-level tasks.
+    MODIFIED: Now includes tags and dependency counts.
     """
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE status = ? AND parent_task_id IS NULL ORDER BY date_added", (status,))
+    # --- MODIFIED: Added joins subquery ---
+    cursor.execute(f"""
+        SELECT 
+            t.*, 
+            {TASK_JOINS_SUBQUERY}
+        FROM tasks t
+        WHERE t.status = ? AND t.parent_task_id IS NULL 
+        ORDER BY t.date_added
+    """, (status,))
+    # --- END MODIFIED ---
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
     
 def get_all_tasks():
-    """ Fetches all tasks regardless of status. """
+    """ 
+    Fetches all tasks regardless of status.
+    MODIFIED: Now includes tags and dependency counts.
+    """
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks ORDER BY date_added")
+    # --- MODIFIED: Added joins subquery ---
+    cursor.execute(f"""
+        SELECT 
+            t.*, 
+            {TASK_JOINS_SUBQUERY}
+        FROM tasks t
+        ORDER BY t.date_added
+    """)
+    # --- END MODIFIED ---
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
     
 # --- NEW: Get all pending tasks (parents and sub-tasks) ---
 def get_all_pending_tasks():
-    """ Fetches all pending tasks, including sub-tasks. """
+    """ 
+    Fetches all pending tasks, including sub-tasks.
+    MODIFIED: Now includes tags and dependency counts.
+    """
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE status = 'pending' ORDER BY parent_task_id, date_added")
+    # --- MODIFIED: Added joins subquery ---
+    cursor.execute(f"""
+        SELECT 
+            t.*, 
+            {TASK_JOINS_SUBQUERY}
+        FROM tasks t
+        WHERE t.status = 'pending' 
+        ORDER BY t.parent_task_id, t.date_added
+    """)
+    # --- END MODIFIED ---
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
 
 # --- NEW: Get a single task by its ID ---
 def get_task_by_id(task_id):
-    """ Fetches a single task by its ID. """
+    """ 
+    Fetches a single task by its ID.
+    MODIFIED: Now includes tags and dependency counts.
+    """
     conn = connect_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
+    # --- MODIFIED: Added joins subquery ---
+    cursor.execute(f"""
+        SELECT 
+            t.*, 
+            {TASK_JOINS_SUBQUERY}
+        FROM tasks t
+        WHERE t.id = ?
+    """, (task_id,))
+    # --- END MODIFIED ---
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -449,13 +564,27 @@ def get_sub_tasks(parent_task_id, status="all"):
     """
     Gets sub-tasks for a given parent_task_id.
     status: 'all', 'pending', or 'completed'
+    MODIFIED: Now includes tags and dependency counts.
     """
     conn = connect_db()
     cursor = conn.cursor()
+    
+    base_query = f"""
+        SELECT 
+            t.*, 
+            {TASK_JOINS_SUBQUERY}
+        FROM tasks t
+        WHERE t.parent_task_id = ?
+    """
+    
     if status == "all":
-        cursor.execute("SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY date_added", (parent_task_id,))
+        query = base_query + " ORDER BY t.date_added"
+        params = (parent_task_id,)
     else:
-        cursor.execute("SELECT * FROM tasks WHERE parent_task_id = ? AND status = ? ORDER BY date_added", (parent_task_id, status))
+        query = base_query + " AND t.status = ? ORDER BY t.date_added"
+        params = (parent_task_id, status)
+        
+    cursor.execute(query, params)
     tasks = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return tasks
@@ -913,6 +1042,28 @@ def add_focus_log(date_str, duration, session_type, task_id=None, notes=None):
          raise
     finally:
         conn.close()
+        
+# --- NEW: Manual Focus Log Function ---
+def add_manual_focus_log(date_str, duration, task_id=None):
+    """
+    Logs a *manual* work session.
+    """
+    conn = connect_db()
+    try:
+        cursor = conn.cursor()
+        new_id = str(uuid.uuid4())
+        cursor.execute("""
+            INSERT INTO focus_log (id, task_id, date_completed, duration_minutes, session_type, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (new_id, task_id, date_str, duration, 'work', 'Manually Logged'))
+        conn.commit()
+    except Exception as e:
+         print(f"Error adding manual focus log: {e}")
+         conn.rollback()
+         raise
+    finally:
+        conn.close()
+# --- END NEW ---
 
 def get_focus_logs_for_date(date_str):
     """
@@ -1123,4 +1274,268 @@ def category_exists(name):
     row = cursor.fetchone()
     conn.close()
     return row is not None
+# --- END NEW ---
+
+# --- NEW: Task Template Functions ---
+
+def get_task_templates():
+    """ Fetches all task templates. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM task_templates ORDER BY name")
+    templates = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return templates
+
+def get_template_tasks(template_id):
+    """ Fetches all tasks (including sub-tasks) that belong to a template. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM template_tasks WHERE template_id = ? ORDER BY is_sub_task, id", (template_id,))
+    tasks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tasks
+
+def save_task_template(template_data, template_tasks_list):
+    """ Saves or updates a template and its associated tasks in a transaction. """
+    conn = connect_db()
+    conn.execute("PRAGMA foreign_keys = ON")
+    cursor = conn.cursor()
+    template_id = template_data.get('id')
+    
+    try:
+        if template_id is None:
+            template_id = str(uuid.uuid4())
+            cursor.execute("""
+                INSERT INTO task_templates (id, name, description, default_priority, default_category)
+                VALUES (?, ?, ?, ?, ?)
+            """, (template_id, template_data['name'], template_data.get('description'), 
+                  template_data.get('default_priority'), template_data.get('default_category')))
+        else:
+            cursor.execute("""
+                UPDATE task_templates SET name = ?, description = ?, default_priority = ?, default_category = ?
+                WHERE id = ?
+            """, (template_data['name'], template_data.get('description'), 
+                  template_data.get('default_priority'), template_data.get('default_category'), template_id))
+            
+            # Delete old template tasks before inserting new ones
+            cursor.execute("DELETE FROM template_tasks WHERE template_id = ?", (template_id,))
+        
+        # Insert all template tasks
+        for task in template_tasks_list:
+            cursor.execute("""
+                INSERT INTO template_tasks (id, template_id, description, notes, priority, is_sub_task, relative_parent_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (str(uuid.uuid4()), template_id, task['description'], task.get('notes'), task['priority'], task['is_sub_task'], task.get('relative_parent_id')))
+        
+        conn.commit()
+        return template_id
+    except Exception as e:
+        print(f"Error saving task template: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def delete_task_template(template_id):
+    """ Deletes a template and its associated tasks. """
+    conn = connect_db()
+    conn.execute("PRAGMA foreign_keys = ON")
+    cursor = conn.cursor()
+    try:
+        # Cascade delete takes care of template_tasks, just delete the parent
+        cursor.execute("DELETE FROM task_templates WHERE id = ?", (template_id,))
+        conn.commit()
+    except Exception as e:
+        print(f"Error deleting task template: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def instantiate_task_template(template_id):
+    """
+    Creates real tasks (parent and sub-tasks) from a template.
+    Returns the ID of the new parent task.
+    """
+    template_tasks = get_template_tasks(template_id)
+    template_data = next((t for t in get_task_templates() if t['id'] == template_id), None)
+    if not template_tasks or not template_data:
+        raise ValueError("Template not found or has no associated tasks.")
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    parent_task_id = None
+    
+    # We need a map to track the new IDs of the template tasks
+    # so we can correctly link the sub-tasks
+    template_id_map = {} 
+
+    try:
+        # Sort to ensure the main parent task is processed first
+        template_tasks.sort(key=lambda t: t['is_sub_task'])
+        
+        for template_task in template_tasks:
+            new_task_id = str(uuid.uuid4())
+            template_id_map[template_task['id']] = new_task_id
+            
+            # Determine the parent ID for the new task
+            new_parent_id = None
+            if template_task['is_sub_task']:
+                # The relative_parent_id here points to the ID of the *parent* template_task
+                relative_parent_id = template_task['relative_parent_id']
+                if relative_parent_id and relative_parent_id in template_id_map:
+                    new_parent_id = template_id_map[relative_parent_id]
+                else:
+                    # If relative parent isn't mapped, link to the main parent_task_id
+                    new_parent_id = parent_task_id
+            
+            # The template itself might have its own parent task definition (is_sub_task=False)
+            if not template_task['is_sub_task'] and parent_task_id is None:
+                parent_task_id = new_task_id # This is the main parent task
+            
+            new_task_data = {
+                "id": new_task_id,
+                "description": template_task['description'],
+                "status": "pending",
+                "date_added": today_str,
+                "deadline": None,
+                "priority": template_task['priority'],
+                "category": template_data['default_category'], # Inherit from template metadata
+                "notes": template_task.get('notes') or f"Created from template: {template_data['name']}",
+                "show_mode": "auto",
+                "parent_task_id": new_parent_id 
+            }
+            
+            add_task(new_task_data) # Use existing DB function
+            
+        return parent_task_id
+        
+    except Exception as e:
+        print(f"Error instantiating template: {e}")
+        # Note: We cannot easily rollback standard SQLite commits here.
+        # This implementation assumes the standard add_task is reliable.
+        raise
+
+# --- END NEW ---
+
+# --- NEW: Tagging Functions ---
+
+def get_all_unique_tags():
+    """ Gets a simple list of all unique tag names. """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM tags ORDER BY name")
+    tags = [row['name'] for row in cursor.fetchall()]
+    conn.close()
+    return tags
+
+def update_tags_for_task(task_id, tag_names_list, db_conn=None):
+    """
+    Updates the tags for a specific task.
+    This is a full replacement (delete all, then add new).
+    """
+    manage_connection = db_conn is None
+    conn = db_conn if db_conn else connect_db()
+    conn.execute("PRAGMA foreign_keys = ON")
+    cursor = conn.cursor()
+    
+    try:
+        # 1. Delete all existing tag links for this task
+        cursor.execute("DELETE FROM task_tags WHERE task_id = ?", (task_id,))
+        
+        if not tag_names_list:
+            if manage_connection:
+                conn.commit()
+            return # No tags to add
+
+        tag_ids = []
+        for tag_name in tag_names_list:
+            # 2. Find or create the tag in the 'tags' table
+            # Use COLLATE NOCASE for case-insensitive matching
+            cursor.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag_name,))
+            cursor.execute("SELECT id FROM tags WHERE name = ? COLLATE NOCASE", (tag_name,))
+            row = cursor.fetchone()
+            if row:
+                tag_ids.append(row['id'])
+        
+        # 3. Link the task to all the tag IDs
+        for tag_id in tag_ids:
+            cursor.execute("INSERT INTO task_tags (task_id, tag_id) VALUES (?, ?)", (task_id, tag_id))
+            
+        if manage_connection:
+            conn.commit()
+            
+    except Exception as e:
+        print(f"Error updating tags for task {task_id}: {e}")
+        if manage_connection:
+            conn.rollback()
+        raise
+    finally:
+        if manage_connection:
+            conn.close()
+
+# --- END NEW ---
+
+# --- NEW: Dependency Functions ---
+
+def add_task_dependency(task_id, depends_on_task_id):
+    """Creates a dependency link (task_id depends on depends_on_task_id)."""
+    conn = connect_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO task_dependencies (task_id, depends_on_task_id) VALUES (?, ?)", (task_id, depends_on_task_id))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        print(f"Dependency from {task_id} to {depends_on_task_id} already exists.")
+    except Exception as e:
+        print(f"Error adding dependency: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def remove_task_dependency(task_id, depends_on_task_id):
+    """Removes a dependency link."""
+    conn = connect_db()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_task_id = ?", (task_id, depends_on_task_id))
+        conn.commit()
+    except Exception as e:
+        print(f"Error removing dependency: {e}")
+        conn.rollback()
+    finally:
+        conn.close()
+
+def get_task_dependencies(task_id):
+    """
+    Gets the list of tasks that the given task_id depends on (its prerequisites).
+    Returns full task details of the prerequisites.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT t.* FROM tasks t
+        JOIN task_dependencies td ON t.id = td.depends_on_task_id
+        WHERE td.task_id = ?
+    """, (task_id,))
+    tasks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+    return tasks
+
+def get_pending_dependency_count(task_id):
+    """
+    Checks if a task has any dependencies that are still 'pending'.
+    Returns the count of pending dependencies.
+    """
+    conn = connect_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT COUNT(t.id) 
+        FROM tasks t
+        JOIN task_dependencies td ON t.id = td.depends_on_task_id
+        WHERE td.task_id = ? AND t.status = 'pending'
+    """, (task_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else 0
 # --- END NEW ---

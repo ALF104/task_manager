@@ -17,7 +17,8 @@ from app.core.database import (
     remove_task_completion_log, get_all_tasks, update_task_status,
     get_schedule_events_for_date, get_calendar_events_for_date,
     get_daily_note, save_daily_note,
-    get_task_by_id
+    get_task_by_id,
+    get_pending_dependency_count # <-- NEW IMPORT
 )
 from app.widgets.task_widgets import TodayTaskWidget
 
@@ -197,6 +198,7 @@ class TodayDashboardTab(QWidget):
                 
                 is_complete_today = is_task_logged_complete(task_id, date_str)
                 
+                # This check is for one-off tasks that are *already* completed
                 is_one_off_complete = (task.get('status') == 'completed' and 
                                        task.get('show_mode') == 'auto' and
                                        not get_show_dates_for_task(task_id) and 
@@ -204,8 +206,8 @@ class TodayDashboardTab(QWidget):
 
                 if is_one_off_complete:
                     continue 
-                if is_complete_today and task.get('show_mode') == 'always_pending':
-                     continue
+                
+                # This check is for *true recurring* tasks that are logged for today
                 if is_complete_today and (get_show_dates_for_task(task_id) or task.get('created_by_automation_id')):
                      continue
 
@@ -259,19 +261,36 @@ class TodayDashboardTab(QWidget):
     def _handle_today_task_completion(self, task_id, date_str, is_checked):
         """Handles logic when a task checkbox is clicked on the dashboard."""
         try:
-            task = next((t for t in get_all_tasks() if t['id'] == task_id), None)
+            task = get_task_by_id(task_id) # Use get_task_by_id to get full data
             if not task: return
+            
+            # --- NEW: Dependency Check ---
+            if is_checked:
+                # We can use the count we already fetched when creating the widget
+                pending_dep_count = task.get('pending_dependency_count', 0) 
+                if pending_dep_count > 0:
+                    QMessageBox.warning(self, "Task Blocked",
+                                        f"This task is blocked by {pending_dep_count} pending prerequisite(s).\n"
+                                        "Complete the other task(s) first.")
+                    self._refresh_today_dashboard() # Revert checkbox
+                    return # Stop processing
+            # --- END NEW ---
 
+            # --- *** THIS IS THE FIX *** ---
+            # A "true" recurring task is one with "show on" dates or from automation.
+            # "Always pending" is just a visibility rule for a one-off task.
             is_recurring = (get_show_dates_for_task(task_id) or 
-                            task.get('created_by_automation_id') or
-                            task.get('show_mode') == 'always_pending')
+                            task.get('created_by_automation_id'))
+            # --- *** END OF FIX *** ---
 
             if is_recurring:
+                # True recurring tasks are logged for the day
                 if is_checked:
                     log_task_completion(task_id, date_str)
                 else:
                     remove_task_completion_log(task_id, date_str)
             else:
+                # One-off tasks (including 'always_pending') are set to completed
                 if is_checked:
                     update_task_status(task_id, 'completed', date_str)
                 else:

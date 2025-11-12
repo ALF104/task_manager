@@ -15,7 +15,8 @@ from PySide6.QtCore import (
 
 # --- Import from our new structure ---
 from app.core.database import (
-    get_schedule_events_for_date, add_schedule_event
+    get_schedule_events_for_date, add_schedule_event,
+    get_app_state # <-- NEW IMPORT
 )
 
 from app.widgets.graphics_items import (
@@ -27,8 +28,8 @@ from app.widgets.dialogs_schedule import (
 )
 
 # --- Constants ---
-SCHEDULE_START_HOUR = 6   # <-- REVERTED (was 0)
-SCHEDULE_END_HOUR = 23   
+# SCHEDULE_START_HOUR = 6   # <-- Removed, now loaded from DB
+# SCHEDULE_END_HOUR = 23    # <-- Removed, now loaded from DB
 SCHEDULE_HOUR_HEIGHT = 60 
 SCHEDULE_TIME_COLUMN_WIDTH = 70 
 SCHEDULE_EVENT_LEFT_MARGIN = 5
@@ -50,6 +51,11 @@ class DailyScheduleTab(QWidget):
         # --- Member Variables ---
         self.current_date = QDate.currentDate()
         self.theme_mode = 'dark' # Default theme
+        
+        # --- MODIFIED: Load settings from DB ---
+        self.schedule_start_hour = int(get_app_state('schedule_start_hour') or 6)
+        self.schedule_end_hour = int(get_app_state('schedule_end_hour') or 23)
+        # --- END MODIFIED ---
 
         # --- Setup UI ---
         self._setup_ui()
@@ -115,7 +121,9 @@ class DailyScheduleTab(QWidget):
         self._draw_schedule_timeline(view_width)
         self._draw_schedule_events(view_width)
 
-        total_height = (SCHEDULE_END_HOUR - SCHEDULE_START_HOUR + 1) * SCHEDULE_HOUR_HEIGHT + SCHEDULE_HEADER_HEIGHT
+        # --- MODIFIED: Use member variables ---
+        total_height = (self.schedule_end_hour - self.schedule_start_hour + 1) * SCHEDULE_HOUR_HEIGHT + SCHEDULE_HEADER_HEIGHT
+        # --- END MODIFIED ---
         self.schedule_scene.setSceneRect(0, 0, view_width, total_height)
 
     def _draw_schedule_timeline(self, view_width):
@@ -127,8 +135,10 @@ class DailyScheduleTab(QWidget):
         text_color = QColor("white") if is_dark_theme else QColor("black")
         font = QFont(); font.setPointSize(9)
 
-        for hour in range(SCHEDULE_START_HOUR, SCHEDULE_END_HOUR + 1):
-            y = (hour - SCHEDULE_START_HOUR) * SCHEDULE_HOUR_HEIGHT + SCHEDULE_HEADER_HEIGHT
+        # --- MODIFIED: Use member variables ---
+        for hour in range(self.schedule_start_hour, self.schedule_end_hour + 1):
+            y = (hour - self.schedule_start_hour) * SCHEDULE_HOUR_HEIGHT + SCHEDULE_HEADER_HEIGHT
+        # --- END MODIFIED ---
             
             time_dt = time(hour, 0)
             time_str = time_dt.strftime("%I:%M %p").lstrip('0')
@@ -143,7 +153,9 @@ class DailyScheduleTab(QWidget):
             line.setPen(QPen(line_color))
             self.schedule_scene.addItem(line)
 
-            if hour < SCHEDULE_END_HOUR:
+            # --- MODIFIED: Use member variable ---
+            if hour < self.schedule_end_hour:
+            # --- END MODIFIED ---
                 y_half = y + SCHEDULE_HOUR_HEIGHT / 2
                 half_line = QGraphicsLineItem(SCHEDULE_TIME_COLUMN_WIDTH + 10, y_half, view_width, y_half)
                 pen = QPen(line_color); pen.setStyle(Qt.PenStyle.DashLine)
@@ -179,7 +191,9 @@ class DailyScheduleTab(QWidget):
         """Converts a 'HH:MM' time string to a Y-coordinate."""
         try:
              t = time.fromisoformat(time_str)
-             total_minutes_from_start = (t.hour - SCHEDULE_START_HOUR) * 60 + t.minute
+             # --- MODIFIED: Use member variable ---
+             total_minutes_from_start = (t.hour - self.schedule_start_hour) * 60 + t.minute
+             # --- END MODIFIED ---
              y = (total_minutes_from_start / 60) * SCHEDULE_HOUR_HEIGHT + SCHEDULE_HEADER_HEIGHT
              return y
         except ValueError:
@@ -191,11 +205,13 @@ class DailyScheduleTab(QWidget):
         y_relative = max(0, y - SCHEDULE_HEADER_HEIGHT)
         total_minutes_from_start = (y_relative / SCHEDULE_HOUR_HEIGHT) * 60
         snapped_total_minutes = round(total_minutes_from_start / 15) * 15
-        hours = SCHEDULE_START_HOUR + (snapped_total_minutes // 60)
+        # --- MODIFIED: Use member variables ---
+        hours = self.schedule_start_hour + (snapped_total_minutes // 60)
         minutes = snapped_total_minutes % 60
-        hours = max(SCHEDULE_START_HOUR, min(SCHEDULE_END_HOUR, hours))
-        if hours == SCHEDULE_END_HOUR:
+        hours = max(self.schedule_start_hour, min(self.schedule_end_hour, hours))
+        if hours == self.schedule_end_hour:
              minutes = 0 
+        # --- END MODIFIED ---
         return f"{int(hours):02d}:{int(minutes):02d}"
 
     def _handle_schedule_background_double_click(self, scene_pos, q_date):
@@ -204,8 +220,10 @@ class DailyScheduleTab(QWidget):
         try:
              start_dt = datetime.strptime(start_time_str, "%H:%M")
              end_dt = start_dt + timedelta(hours=1)
-             end_hour_dt = datetime.strptime(f"{SCHEDULE_END_HOUR}:00", "%H:%M")
+             # --- MODIFIED: Use member variable ---
+             end_hour_dt = datetime.strptime(f"{self.schedule_end_hour}:00", "%H:%M")
              if end_dt > end_hour_dt: end_dt = end_hour_dt
+             # --- END MODIFIED ---
              end_time_str = end_dt.strftime("%H:%M")
         except ValueError:
              end_time_str = "10:00" 
@@ -235,7 +253,16 @@ class DailyScheduleTab(QWidget):
         if self.isVisible():
             self.refresh_display()
 
-    # ***CHANGE***: Add the new set_theme method
+    # --- *** THIS IS THE FIX *** ---
+    @Slot()
+    def reload_settings(self):
+        """Public slot to reload settings from DB and update the view."""
+        print("[Schedule] Reloading settings...")
+        self.schedule_start_hour = int(get_app_state('schedule_start_hour') or 6)
+        self.schedule_end_hour = int(get_app_state('schedule_end_hour') or 23)
+        self.refresh_display()
+    # --- *** END OF FIX *** ---
+
     @Slot(str)
     def set_theme(self, theme_mode):
         """Public slot to update the timer's theme mode."""

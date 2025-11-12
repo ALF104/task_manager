@@ -41,7 +41,7 @@ QPushButton:disabled {
     background-color: #4A4D50;
     color: #888;
 }
-QLineEdit, QComboBox, QPlainTextEdit, QTimeEdit, QTextEdit {
+QLineEdit, QComboBox, QPlainTextEdit, QTimeEdit, QTextEdit, QDateEdit {
     background-color: #343638;
     border: 1px solid #4A4D50;
     padding: 5px;

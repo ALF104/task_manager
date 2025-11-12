@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QTextBrowser,
     QGraphicsRectItem, QGraphicsTextItem, QGraphicsItem, QGroupBox, QToolBar,
     QTextEdit, QInputDialog, QSpinBox,
-    QMenu # <-- NEW IMPORT
+    QMenu 
 )
 from PySide6.QtGui import (
     QFont, QColor, QPen, QBrush, QAction, QTextCharFormat,
@@ -24,7 +24,8 @@ from PySide6.QtCore import (
 # --- Import from our new structure ---
 from app.core.database import (
     get_automation_rule_details, get_automations,
-    delete_automation_rule, save_automation_rule
+    delete_automation_rule, save_automation_rule,
+    get_categories # <-- NEW IMPORT
 )
 
 
@@ -127,7 +128,7 @@ class ManageAutomationsDialog(QDialog):
                 QMessageBox.critical(self, "Database Error", f"Could not delete rule: {e}")
 
 
-# --- Automation Action Dialogs (NEW) ---
+# --- Automation Action Dialogs (MODIFIED) ---
 class TaskActionDialog(QDialog):
     """A dialog to add or edit a 'create task' action."""
     def __init__(self, action_data=None, parent=None):
@@ -140,22 +141,44 @@ class TaskActionDialog(QDialog):
         self.task_desc_entry.setPlaceholderText("e.g., 'Dispatch Exhibits'")
         self.task_priority_combo = QComboBox()
         self.task_priority_combo.addItems(["Low", "Medium", "High"])
-        self.task_category_entry = QLineEdit()
-        self.task_category_entry.setPlaceholderText("e.g., 'Automation'")
+        
+        # --- MODIFIED: Use QComboBox for Category ---
+        self.task_category_combo = QComboBox()
+        # --- END MODIFIED ---
 
         self.layout.addRow("Task Description:", self.task_desc_entry)
         self.layout.addRow("Task Priority:", self.task_priority_combo)
-        self.layout.addRow("Task Category:", self.task_category_entry)
+        # --- MODIFIED: Use QComboBox for Category ---
+        self.layout.addRow("Task Category:", self.task_category_combo)
+        # --- END MODIFIED ---
 
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(self.reject)
         self.layout.addRow(self.button_box)
 
+        self._load_categories() # Load categories into the combo box
+
         if action_data:
             self.task_desc_entry.setText(action_data.get('param1', ''))
             self.task_priority_combo.setCurrentText(action_data.get('param2', 'Medium'))
-            self.task_category_entry.setText(action_data.get('param3', 'Automation'))
+            # --- MODIFIED: Set category combo ---
+            self.task_category_combo.setCurrentText(action_data.get('param3', 'General'))
+            # --- END MODIFIED ---
+        else:
+            self.task_priority_combo.setCurrentText('Medium')
+            self.task_category_combo.setCurrentText('General')
+
+    def _load_categories(self):
+        """Loads categories from DB into the combo box."""
+        try:
+            self.task_category_combo.clear()
+            categories = get_categories()
+            category_names = [cat['name'] for cat in categories]
+            self.task_category_combo.addItems(category_names)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not load categories: {e}")
+            self.task_category_combo.addItem("General") # Fallback
 
     def get_data(self):
         """Returns the action data from the form."""
@@ -168,7 +191,9 @@ class TaskActionDialog(QDialog):
             'action_type': 'ensure_task_link',
             'param1': desc,
             'param2': self.task_priority_combo.currentText(),
-            'param3': self.task_category_entry.text().strip() or "Automation"
+            # --- MODIFIED: Get text from category combo ---
+            'param3': self.task_category_combo.currentText() or "General"
+            # --- END MODIFIED ---
         }
 
 class ScheduleActionDialog(QDialog):

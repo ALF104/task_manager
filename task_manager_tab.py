@@ -15,10 +15,13 @@ from PySide6.QtCore import (
 from app.core.database import (
     get_tasks, add_task, update_task_status, delete_task, get_all_tasks,
     get_sub_tasks, get_pending_subtask_count,
-    get_categories # <-- NEW IMPORT
+    get_categories, 
+    get_task_templates, instantiate_task_template,
+    get_pending_dependency_count,
+    get_all_unique_tags # <-- NEW IMPORT
 )
 from app.widgets.task_widgets import TaskWidget
-from app.widgets.dialogs_task import TaskDetailsDialog
+from app.widgets.dialogs_task import TaskDetailsDialog, DeadlineCalendarDialog
 # --- This is the file. There should be NO MORE IMPORTS after this line ---
 
 # --- Task Manager Tab Widget ---
@@ -41,7 +44,9 @@ class TaskManagerTab(QWidget):
         self._setup_ui()
 
         # --- Load Initial Data ---
-        self._load_categories() # <-- Now loads *all* category boxes
+        self._load_categories() 
+        self._load_tags() # <-- NEW: Load tags
+        self._load_templates() 
         self._display_tasks()
 
     def _setup_ui(self):
@@ -55,6 +60,12 @@ class TaskManagerTab(QWidget):
         self.task_entry.returnPressed.connect(self._add_task)
         input_layout.addWidget(self.task_entry, 1)
 
+        self.template_combo = QComboBox()
+        self.template_combo.setFixedWidth(120)
+        self.template_combo.addItem("— Use Template —")
+        self.template_combo.currentIndexChanged.connect(self._on_template_selected) 
+        input_layout.addWidget(self.template_combo)
+
         self.deadline_button = QPushButton("No Deadline")
         self.deadline_button.clicked.connect(self._open_deadline_calendar)
         input_layout.addWidget(self.deadline_button)
@@ -64,11 +75,9 @@ class TaskManagerTab(QWidget):
         self.priority_combo.setCurrentText("Medium")
         input_layout.addWidget(self.priority_combo)
 
-        # --- MODIFIED: Category QLineEdit replaced with QComboBox ---
         self.category_combo = QComboBox()
         self.category_combo.setFixedWidth(100)
         input_layout.addWidget(self.category_combo)
-        # --- END MODIFIED ---
 
         add_button = QPushButton("Add Task")
         add_button.clicked.connect(self._add_task)
@@ -86,6 +95,13 @@ class TaskManagerTab(QWidget):
         self.category_filter_combo.addItem("All Categories")
         self.category_filter_combo.currentTextChanged.connect(self._display_tasks)
         filter_layout.addWidget(self.category_filter_combo)
+        
+        # --- NEW: Tag Filter ---
+        self.tag_filter_combo = QComboBox()
+        self.tag_filter_combo.addItem("All Tags")
+        self.tag_filter_combo.currentTextChanged.connect(self._display_tasks)
+        filter_layout.addWidget(self.tag_filter_combo)
+        # --- END NEW ---
 
         self.toggle_view_button = QPushButton("View Completed")
         self.toggle_view_button.clicked.connect(self._toggle_view)
@@ -97,23 +113,63 @@ class TaskManagerTab(QWidget):
         self.task_tree_widget.setHeaderHidden(True) # No header
         layout.addWidget(self.task_tree_widget, 1) # Give tree max space
 
+    def _load_templates(self):
+        """Loads task templates into the combo box."""
+        self.template_combo.blockSignals(True)
+        self.template_combo.clear()
+        self.template_combo.addItem("— Use Template —")
+        
+        try:
+            templates = get_task_templates()
+            for template in templates:
+                self.template_combo.addItem(template['name'], template['id'])
+        except Exception as e:
+            print(f"Error loading templates: {e}")
+            
+        self.template_combo.blockSignals(False)
+        
+    def _on_template_selected(self, index):
+        """Triggers task creation if a template is selected."""
+        if index > 0:
+            self.template_combo.blockSignals(True)
+            try:
+                self._add_task() 
+            finally:
+                self.template_combo.blockSignals(False)
+
+
     def _add_task(self):
         description = self.task_entry.text().strip()
         
-        if not description:
+        selected_template_index = self.template_combo.currentIndex()
+        
+        if selected_template_index > 0:
+            # --- Instantiating from a Template ---
+            template_id = self.template_combo.currentData()
+            template_name = self.template_combo.currentText()
+            try:
+                instantiate_task_template(template_id)
+                QMessageBox.information(self, "Template Created", 
+                                        f"Successfully created task(s) from template: '{template_name}'.")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to create tasks from template: {e}")
+                
+            finally:
+                self._reset_and_refresh_ui()
+                return
+
+        elif not description:
             # Open the full details dialog for a new task
             dialog = TaskDetailsDialog(task_data=None, parent=self, is_new_task=True)
-            # Connect the dialog's signal to *this* widget's update signal
             dialog.task_saved.connect(self.task_list_updated)
             dialog.exec()
             return
 
         # Simple task creation from the main bar
-        # --- MODIFIED: Read from category_combo ---
         category = self.category_combo.currentText()
         if not category:
             category = "General" # Safeguard
-        # --- END MODIFIED ---
         priority = self.priority_combo.currentText()
         deadline_str = self.selected_deadline.toString("yyyy-MM-dd") if self.selected_deadline else None
         
@@ -126,32 +182,35 @@ class TaskManagerTab(QWidget):
             "category": category,
             "notes": "",
             "show_mode": "auto",
-            "parent_task_id": None # <-- Explicitly set as a top-level task
+            "parent_task_id": None 
         }
 
         try:
             add_task(new_task)
-            # Reset input fields
-            self.task_entry.clear()
-            # --- MODIFIED: Reset category_combo ---
-            self.category_combo.setCurrentText("General")
-            # --- END MODIFIED ---
-            self.priority_combo.setCurrentText("Medium")
-            self.selected_deadline = None
-            self.deadline_button.setText("No Deadline")
-            
-            # Refresh UI
-            # self._load_categories() # No longer needed here, _display_tasks does it
-            if self.view_mode == "completed":
-                self._toggle_view()
-            else:
-                 self._display_tasks()
-            
-            # Emit signal that data has changed
-            self.task_list_updated.emit()
+            self._reset_and_refresh_ui()
 
         except Exception as e:
             QMessageBox.critical(self, "Database Error", f"Failed to add task: {e}")
+
+
+    def _reset_and_refresh_ui(self):
+        """Helper to reset inputs and refresh display after saving/creation."""
+        self.task_entry.clear()
+        self.category_combo.setCurrentText("General")
+        self.priority_combo.setCurrentText("Medium")
+        self.selected_deadline = None
+        self.deadline_button.setText("No Deadline")
+        
+        self.template_combo.blockSignals(True)
+        self.template_combo.setCurrentIndex(0) # Reset template selector
+        self.template_combo.blockSignals(False)
+        
+        if self.view_mode == "completed":
+            self._toggle_view()
+        else:
+             self._display_tasks()
+        
+        self.task_list_updated.emit() # This will trigger _load_tags in main
 
     def _display_tasks(self):
         # Clear existing task widgets
@@ -160,7 +219,6 @@ class TaskManagerTab(QWidget):
         main_window = self.window() # Get main window to connect info button
 
         if self.view_mode == "pending":
-            # get_tasks() now only returns top-level tasks
             tasks_to_show = get_tasks('pending')
             
             # Sort by priority, then by deadline (tasks without deadline last)
@@ -180,6 +238,16 @@ class TaskManagerTab(QWidget):
             selected_category = self.category_filter_combo.currentText()
             if selected_category != "All Categories":
                 tasks_to_show = [t for t in tasks_to_show if t.get('category') == selected_category]
+
+            # --- NEW: Apply Tag Filter ---
+            selected_tag = self.tag_filter_combo.currentText()
+            if selected_tag != "All Tags":
+                # Filter tasks where the selected tag is in their comma-separated 'tags' string
+                tasks_to_show = [
+                    t for t in tasks_to_show 
+                    if t.get('tags') and selected_tag in [tag.strip() for tag in t['tags'].split(',')]
+                ]
+            # --- END NEW ---
 
             # --- Create and add TaskWidget for each task ---
             for task in tasks_to_show:
@@ -221,12 +289,10 @@ class TaskManagerTab(QWidget):
             completed_tasks = get_tasks('completed')
             completed_tasks.sort(key=lambda t: t.get('date_completed', ''), reverse=True)
             for task in completed_tasks:
-                 # Just show a simple label for completed tasks
                  label_text = f"[{task.get('category', 'G')[:1]}] {task.get('description','')} (Completed: {task.get('date_completed', 'NA')})"
                  completed_label = QLabel(label_text)
                  completed_label.setStyleSheet("color: gray; padding: 5px; background-color: #343638; border-radius: 4px;") 
                  
-                 # Add as a top-level item in the tree
                  item = QTreeWidgetItem(self.task_tree_widget)
                  self.task_tree_widget.setItemWidget(item, 0, completed_label)
 
@@ -235,30 +301,24 @@ class TaskManagerTab(QWidget):
         MODIFIED: This function now loads categories from the DB
         and populates *both* the filter and the 'add task' combo boxes.
         """
-        # --- Store current selections ---
         current_filter_selection = self.category_filter_combo.currentText()
         current_add_selection = self.category_combo.currentText()
         
-        # --- Block Signals ---
         self.category_filter_combo.blockSignals(True) 
         self.category_combo.blockSignals(True)
         
-        # --- Clear ---
         self.category_filter_combo.clear()
         self.category_combo.clear()
         
-        # --- Repopulate ---
         self.category_filter_combo.addItem("All Categories")
         
         try:
-            categories = get_categories() # Get from new DB table
+            categories = get_categories() 
             category_names = [cat['name'] for cat in categories]
             
-            # Add to both boxes
             self.category_filter_combo.addItems(category_names)
             self.category_combo.addItems(category_names)
             
-            # --- Restore selections ---
             index_filter = self.category_filter_combo.findText(current_filter_selection)
             if index_filter != -1:
                 self.category_filter_combo.setCurrentIndex(index_filter)
@@ -279,9 +339,36 @@ class TaskManagerTab(QWidget):
                  self.category_combo.addItem("General")
                  
         finally:
-            # --- Unblock Signals ---
             self.category_filter_combo.blockSignals(False) 
             self.category_combo.blockSignals(False)
+            
+    # --- NEW: Load Tags ---
+    def _load_tags(self):
+        """Loads all unique tags into the tag filter combo box."""
+        current_selection = self.tag_filter_combo.currentText()
+        self.tag_filter_combo.blockSignals(True)
+        
+        self.tag_filter_combo.clear()
+        self.tag_filter_combo.addItem("All Tags")
+        
+        try:
+            tags = get_all_unique_tags()
+            self.tag_filter_combo.addItems(tags)
+            
+            index = self.tag_filter_combo.findText(current_selection)
+            if index != -1:
+                self.tag_filter_combo.setCurrentIndex(index)
+            else:
+                self.tag_filter_combo.setCurrentIndex(0)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Error loading tags: {e}")
+            if self.tag_filter_combo.count() == 0:
+                self.tag_filter_combo.addItem("All Tags")
+        
+        finally:
+            self.tag_filter_combo.blockSignals(False)
+    # --- END NEW ---
 
     def _toggle_view(self):
         if self.view_mode == "pending":
@@ -294,33 +381,35 @@ class TaskManagerTab(QWidget):
 
     def _handle_task_status_change(self, task_id, is_checked):
         
-        # --- NEW LOGIC: Check for pending sub-tasks ---
         if is_checked:
             try:
-                pending_count = get_pending_subtask_count(task_id)
-                if pending_count > 0:
+                # Check 1: Sub-tasks
+                pending_sub_count = get_pending_subtask_count(task_id)
+                if pending_sub_count > 0:
                     QMessageBox.warning(self, "Task Not Empty",
-                                        f"You cannot complete this task.\nIt still has {pending_count} pending sub-task(s).")
-                    # Refresh the whole tree. This is the simplest way
-                    # to reset the checkbox to its original state.
-                    self._display_tasks()
+                                        f"You cannot complete this task.\nIt still has {pending_sub_count} pending sub-task(s).")
+                    self._display_tasks() # Revert checkbox
                     return # Stop processing
+                    
+                # Check 2: Dependencies
+                pending_dep_count = get_pending_dependency_count(task_id)
+                if pending_dep_count > 0:
+                    QMessageBox.warning(self, "Task Blocked",
+                                        f"This task is blocked by {pending_dep_count} pending prerequisite(s).\n"
+                                        "Complete the other task(s) first.")
+                    self._display_tasks() # Revert checkbox
+                    return # Stop processing
+                    
             except Exception as e:
-                QMessageBox.critical(self, "Database Error", f"Could not check for sub-tasks: {e}")
+                QMessageBox.critical(self, "Database Error", f"Could not check for sub-tasks or dependencies: {e}")
                 return
-        # --- END OF NEW LOGIC ---
 
         new_status = 'completed' if is_checked else 'pending'
         date_completed = datetime.now().strftime("%Y-%m-%d") if is_checked else None
         
         try:
             update_task_status(task_id, new_status, date_completed)
-            
-            # Instead of complex logic to find/remove the item,
-            # just refresh the entire display. It's cleaner.
             self._display_tasks()
-            
-            # Emit signal that data has changed
             self.task_list_updated.emit()
 
         except Exception as e:
@@ -328,10 +417,6 @@ class TaskManagerTab(QWidget):
             self._display_tasks() # Full refresh on error
 
     def _handle_task_delete(self, task_id):
-        # We don't need to find the widget anymore, as we'll refresh the list.
-        # But we can still get the description for the dialog if we want.
-        # For simplicity, we'll use a generic message.
-        # (We could also query the DB for the task description first)
         
         reply = QMessageBox.question(self, 'Confirm Delete',
                                        f"Are you sure you want to delete this task?\n(This will also delete all its sub-tasks)",
@@ -341,44 +426,17 @@ class TaskManagerTab(QWidget):
         if reply == QMessageBox.StandardButton.Yes:
             try:
                 delete_task(task_id) # This will cascade-delete sub-tasks
-                
-                # Refresh the entire display
                 self._display_tasks() 
-                
-                # Emit signal that data has changed
                 self.task_list_updated.emit()
 
             except Exception as e:
                 QMessageBox.critical(self, "Database Error", f"Failed to delete task: {e}")
 
     def _open_deadline_calendar(self):
-        # This dialog is simple enough to keep inside this class
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Select Deadline")
-        layout = QVBoxLayout(dialog)
-
-        calendar = QCalendarWidget()
-        calendar.setGridVisible(True)
-        if self.selected_deadline: 
-             calendar.setSelectedDate(self.selected_deadline)
-        else:
-             calendar.setSelectedDate(QDate.currentDate()) 
-
-        layout.addWidget(calendar)
-
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | 
-                                      QDialogButtonBox.StandardButton.Cancel |
-                                      QDialogButtonBox.StandardButton.Reset) 
+        dialog = DeadlineCalendarDialog(self.selected_deadline, self)
         
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(dialog.reject)
-        # Reset button clears the date selection
-        button_box.button(QDialogButtonBox.StandardButton.Reset).clicked.connect(lambda: calendar.setSelectedDate(QDate())) 
-
-        layout.addWidget(button_box)
-
         if dialog.exec(): 
-            selected_qdate = calendar.selectedDate()
+            selected_qdate = dialog.get_selected_date()
             if selected_qdate.isValid():
                 self.selected_deadline = selected_qdate 
                 self.deadline_button.setText(selected_qdate.toString("yyyy-MM-dd"))
@@ -386,5 +444,4 @@ class TaskManagerTab(QWidget):
                 self.selected_deadline = None
                 self.deadline_button.setText("No Deadline")
         elif self.selected_deadline is None: 
-             # User cancelled, but had no deadline selected
              self.deadline_button.setText("No Deadline")

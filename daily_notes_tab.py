@@ -1,14 +1,18 @@
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QToolBar, QTextEdit, QMessageBox
+    QWidget, QVBoxLayout, QToolBar, QTextEdit, QMessageBox,
+    QHBoxLayout, QPushButton, QDateEdit, QLabel
 )
 from PySide6.QtGui import (
     QFont, QTextCharFormat, QTextListFormat
 )
+from PySide6.QtCore import QDate # <-- NEW IMPORT
+
 from app.core.database import (
-    save_daily_note, get_daily_note
+    save_daily_note, get_daily_note,
+    get_completed_tasks_for_date, get_focus_logs_for_date # <-- NEW IMPORTS
 )
 
 # --- Daily Notes Tab Widget ---
@@ -30,10 +34,6 @@ class DailyNotesTab(QWidget):
         """Builds the UI for this tab."""
         layout = QVBoxLayout(self) 
         
-        self.notes_editor = QTextEdit()
-        self.notes_editor.setPlaceholderText("Start writing your notes for today...")
-        self.notes_editor.currentCharFormatChanged.connect(self._update_format_buttons)
-        
         # Add a toolbar
         self.notes_toolbar = QToolBar("Notes Toolbar")
         layout.addWidget(self.notes_toolbar)
@@ -52,6 +52,32 @@ class DailyNotesTab(QWidget):
 
         self.action_bullet = self.notes_toolbar.addAction("Bullets")
         self.action_bullet.triggered.connect(self._format_bullet_list)
+        
+        # --- NEW: Daily Review Section ---
+        review_layout = QHBoxLayout()
+        review_layout.addWidget(QLabel("Generate Review for:"))
+        
+        self.review_date_edit = QDateEdit()
+        self.review_date_edit.setCalendarPopup(True)
+        self.review_date_edit.setDate(QDate.currentDate().addDays(-1)) # Default to yesterday
+        
+        # --- THIS IS THE FIX ---
+        self.review_date_edit.setDisplayFormat("dd/MM/yyyy")
+        # --- END OF FIX ---
+        
+        review_layout.addWidget(self.review_date_edit)
+        
+        generate_review_btn = QPushButton("Generate Review")
+        generate_review_btn.clicked.connect(self._generate_daily_review)
+        review_layout.addWidget(generate_review_btn)
+        review_layout.addStretch()
+        
+        layout.addLayout(review_layout)
+        # --- END NEW ---
+        
+        self.notes_editor = QTextEdit()
+        self.notes_editor.setPlaceholderText("Start writing your notes for today...")
+        self.notes_editor.currentCharFormatChanged.connect(self._update_format_buttons)
         
         layout.addWidget(self.notes_editor, 1) # Add editor below toolbar
 
@@ -101,3 +127,54 @@ class DailyNotesTab(QWidget):
         cursor = self.notes_editor.textCursor()
         # ***FIX: Use QTextListFormat.ListDisc for correct bullet points***
         cursor.createList(QTextListFormat.ListDisc)
+        
+    # --- NEW: Daily Review Methods ---
+    
+    def _generate_daily_review(self):
+        """Fetches data for the selected date and appends it to the note."""
+        review_qdate = self.review_date_edit.date()
+        review_date_str = review_qdate.toString("yyyy-MM-dd")
+        
+        review_html = f"<h2>Daily Review for {review_date_str}</h2>"
+        
+        try:
+            # 1. Get Completed Tasks
+            completed_tasks = get_completed_tasks_for_date(review_date_str)
+            review_html += "<h3>Tasks Completed</h3>"
+            if not completed_tasks:
+                review_html += "<ul><li>No tasks completed.</li></ul>"
+            else:
+                review_html += "<ul>"
+                for task in completed_tasks:
+                    review_html += f"<li>{task['description']}</li>"
+                review_html += "</ul>"
+                
+            # 2. Get Focus Sessions
+            focus_logs = get_focus_logs_for_date(review_date_str)
+            review_html += "<h3>Focus Sessions Logged</h3>"
+            if not focus_logs:
+                review_html += "<ul><li>No focus sessions logged.</li></ul>"
+            else:
+                review_html += "<ul>"
+                for log in focus_logs:
+                    duration = log['duration_minutes']
+                    task_desc = log['task_description']
+                    
+                    if log['session_type'] == 'break':
+                        review_html += f"<li>Break ({duration}m)</li>"
+                    else:
+                        review_html += f"<li>{task_desc} ({duration}m)</li>"
+                review_html += "</ul>"
+            
+            # 3. Add section for thoughts
+            review_html += "<h3>My Thoughts</h3>"
+            review_html += "<p>...</p><br>"
+            
+            # Append to the editor
+            self.notes_editor.moveCursor(self.notes_editor.textCursor().MoveOperation.End)
+            self.notes_editor.insertHtml(review_html)
+            self.notes_editor.insertHtml("<br>") # Add extra space
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Could not generate review: {e}")
+    # --- END NEW ---
